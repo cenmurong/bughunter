@@ -1,0 +1,173 @@
+inurl:.php?id=
+inurl:.asp?id=
+inurl:.aspx?id=
+inurl:.jsp?id=
+inurl:products.php?category=
+inurl:article.php?id=
+inurl:page.php?id=
+inurl:params.php?id=
+inurl:cart.php?id=
+inurl:item.php?id=
+inurl:news.php?id=
+inurl:event.php?id=
+inurl:profile.php?user_id=
+inurl:search.php?q=
+inurl:index.php?cat_id=
+inurl:index.php?bookid=
+inurl:trainers.php?id=
+inurl:page.php?file=
+inurl:item.php?item_id=
+inurl:news_view.php?id=
+inurl:gallery.php?id=
+inurl:store.php?id=
+inurl:view.php?id=
+inurl:profile.php?id=
+inurl:event.php?id=
+inurl:detail.php?id=
+inurl:index.cfm?id=
+inurl:index.pl?id=
+inurl:index.cgi?id=
+inurl:show.php?id=
+inurl:read.php?id=
+inurl:view_product.php?id=
+inurl:product_info.php?products_id=
+inurl:category.php?id=
+inurl:browse.php?id=
+inurl:details.php?id=
+
+inurl:index.php?page=
+inurl:index.php?file=
+inurl:index.php?path=
+inurl:main.php?include=
+inurl:home.php?page=
+inurl:page.php?file=
+inurl:view.php?page=
+inurl:download.php?file=
+inurl:include.php?path=
+inurl:load.php?file=
+inurl:viewpage.php?page=
+
+inurl:redirect.php?url=http
+inurl:redirect.php?uri=http
+inurl:login.php?next=http
+inurl:login.php?redirect_to=http
+inurl:logout.php?return_to=http
+inurl:auth.php?redirect_uri=http
+inurl:redir.php?url=http
+inurl:go.php?url=http
+inurl:redirect.aspx?url=http
+inurl:redirect?url=http
+inurl:cgi-bin/redirect.cgi?url=
+
+filetype:env intext:DB_PASSWORD
+filetype:log intext:password
+filetype:sql "INSERT INTO" "password"
+filetype:bak inurl:wp-content | inurl:database
+filetype:ini intext:password | intext:secret
+filetype:config intext:db_password | intext:api_key
+filetype:yml intext:aws_access_key_id | intext:docker-compose
+filetype:json intext:firebase_database_url | intext:api_keys
+filetype:pem intext:"PRIVATE KEY"
+filetype:ppk intext:"PuTTY-User-Key-File-2"
+ext:log "PHP Fatal error"
+ext:log inurl:log
+ext:txt "BEGIN PRIVATE KEY"
+ext:key intext:"BEGIN RSA PRIVATE KEY"
+ext:sql "CREATE TABLE" "password"
+ext:bak "MySQL dump"
+ext:cfg "username" "password"
+ext:conf "password"
+ext:csv "username,password"
+
+intitle:"index of" "backup" | "database" | "dump"
+intitle:"index of" ".git"
+intitle:"index of" ".env"
+intitle:"index of" ".ssh"
+intitle:"index of" "id_rsa"
+intitle:"index of" "wp-content/uploads"
+intitle:"index of" "config"
+intitle:"index of" "secret"
+intitle:"index of" "etc"
+intitle:"index of" "logs"
+intitle:"index of" "/proc/self/cwd"
+inurl:"/phpmyadmin/setup/index.php"
+inurl:"/cgi-bin/" "v"
+
+site:*.s3.amazonaws.com
+site:*.s3.amazonaws.com
+site:storage.googleapis.com
+site:blob.core.windows.net
+site:digitaloceanspaces.com
+site:github.com "remove password" | "api key"
+site:gitlab.com "DB_PASSWORD"
+site:bitbucket.org "password"
+site:trello.com "password" | "api_key"
+site:docs.google.com "password" | "credentials"
+inurl:".git" AND intext:"config" -github
+
+intitle:"Login" inurl:login
+intitle:"Admin" inurl:admin
+intitle:"Dashboard" inurl:admin
+intitle:"Sign In"
+inurl:admin.php
+inurl:login.php
+inurl:admin/login.php
+inurl:admin/index.php
+inurl:wp-login.php
+inurl:administrator/index.php
+inurl:cpanel
+inurl:webmail
+
+inurl:upload.php
+inurl:upload-file.php
+intitle:"Upload file"
+inurl:file_upload.php
+
+inurl:search.php?q=
+inurl:search.php?query=
+inurl:search.php?keyword=
+inurl:search.php?s=
+inurl:results.php?q=
+inurl:index.php?q=
+inurl:profile.php?name=
+inurl:comment.php?id=
+inurl:view.php?name=
+inurl:redirect.php?url= (juga bisa untuk Open Redirect)
+
+inurl:ping.php?host=
+inurl:cmd.php?cmd=
+inurl:exec.php?cmd=
+inurl:diag.php?ip=
+inurl:trace.php?target=
+inurl:shell.php?cmd=
+
+inurl:profile.php?template=
+inurl:page.php?view=
+inurl:index.php?name=
+inurl:home.php?name={{7*7}}
+
+inurl:/api/v1/
+inurl:/api/v2/
+inurl:/api/v3/
+inurl:/swagger/index.html | inurl:/swagger-ui.html
+inurl:/api-docs | inurl:/api/docs
+inurl:/graphql | inurl:/graphiql
+filetype:json inurl:api "key"
+intext:"index of" "docker-compose.yml"
+intext:"kibana" intitle:"Dashboard"
+
+intext:"Notice:" "on line" "in /var/www/html/"
+intext:"Warning:" "on line" "in /var/www/html/"
+intitle:"phpinfo()" "PHP Version"
+inurl:phpinfo.php
+intext:"Traceback (most recent call last):" filetype:py
+intext:"A syntax error has occurred" filetype:cfm
+inurl:/wp-content/debug.log
+intitle:"Django debug page"
+intitle:"Laravel debug page"
+
+inurl:/wp-content/plugins/
+inurl:/wp-content/themes/
+intext:"Powered by vBulletin"
+intext:"Powered by Joomla"
+intext:"Powered by Drupal"
