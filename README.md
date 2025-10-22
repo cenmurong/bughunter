@@ -1,2 +1,2 @@
-# bughunter
-Bug Hunter adalah alat bantu command-line yang dirancang untuk membantu dalam proses bug hunting pada aplikasi web. Alat ini mengotomatiskan beberapa tugas seperti pencarian target menggunakan dork, pengindeksan, dan pemindaian kerentanan pada URL.
+# Bug Hunter V.1
+Bug Hunter is a command-line tool designed to assist in the bug hunting process for web applications. It automates several tasks such as target discovery using dorks, indexing, and URL vulnerability scanning.
