@@ -1,4 +1,4 @@
-# Bug Hunter V.1
+# Bug Hunter V.1 [currently doing bug fixing pls wait...]
 
 ```
 d8888b. db    db  d888b  db   db db    db d8b   db d888888b d88888b d8888b. 
