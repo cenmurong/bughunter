@@ -24,7 +24,7 @@ Bug Hunter is a command-line tool designed to assist in the process of bug hunti
 1.  **Clone this repository:**
     ```
     git clone https://github.com/cenmurong/bughunter
-    cd bughunter/tools
+    cd bughunter
     ```
 
 2.  **Install dependencies:**
