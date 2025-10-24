@@ -181,7 +181,9 @@ Use `-h` to see all available flags:
 ```bash
 python3 misc/tools.py -h
 ```
-
+```
+xss, sqli, ssti, lfi, rfi, crlf, command_injection, xxe, nosql_injection, ssrf, ssrf_internal, open_redirect, csrf, idor, file_upload, cors, graphql, default_creds, oauth, security_headers, waf_bypass, api_leakage, jwt, prototype_pollution, session_fixation, api_token_leak
+```
 ## Configuration
 
 You can customize payloads, user-agents, and paths by editing the `config.json` file directly.
