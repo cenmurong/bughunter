@@ -18,11 +18,11 @@ def check_proxy(proxy):
     try:
         response = requests.get("http://httpbin.org/ip",
                                 proxies={'http': proxy, 'https': proxy},
-                                timeout=7) 
+                                timeout=7)
         if response.status_code == 200:
             return proxy
     except requests.exceptions.RequestException:
-        pass 
+        pass
     return None
 
 def log(level, message):
@@ -34,13 +34,13 @@ def log(level, message):
         "error": Fore.RED,
         "run": Fore.MAGENTA
     }
-    icon_map = {"info": "ℹ️", "success": "✅", "warn": "⚠️", "error": "❌", "run": "🚀"}
+    icon_map = {"info": "[INFO]", "success": "[SUCCESS]", "warn": "[WARN]", "error": "[ERROR]", "run": "[RUN]"}
     color = color_map.get(level, Fore.WHITE)
     print(f"{color}{icon_map.get(level, ' ')} {message}{Style.RESET_ALL}")
 
 def collect_and_save_proxies():
     """Fetches a list of free proxies from public sources and saves them to a file.""" 
-    parser = argparse.ArgumentParser(description="Proxy Downloader and Verifier.")
+    parser = argparse.ArgumentParser(description="Proxy Downloader and Verifier.") 
     parser.add_argument("--count", type=int, default=50, help="The number of active proxies to collect.")
     args = parser.parse_args()
     desired_count = args.count
@@ -77,7 +77,7 @@ def collect_and_save_proxies():
         shuffled_proxies = list(initial_proxies)
         random.shuffle(shuffled_proxies)
         futures = {executor.submit(check_proxy, proxy) for proxy in shuffled_proxies}
-        with tqdm(total=desired_count, desc="Checking Proxies") as pbar:
+        with tqdm(total=desired_count, desc="Checking Proxies", ascii=True) as pbar:
             for future in as_completed(futures):
                 result = future.result()
                 if result:

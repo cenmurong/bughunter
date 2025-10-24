@@ -42,15 +42,14 @@ USER_AGENTS = [
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PAYLOADS_DIR = os.path.join(SCRIPT_DIR, '..', 'payloads')
-WORDLISTS_DIR = os.path.join(SCRIPT_DIR, '..', 'wordlists')
-DORK_FILE_PATH = os.path.join(WORDLISTS_DIR, 'dork.txt')
+DORK_FILE_PATH = os.path.join(PAYLOADS_DIR, 'dork.txt')
 PROXY_FILE_PATH = os.path.join(PAYLOADS_DIR, 'proxies.txt')
 
 def _get_wib_timestamp():
-    return datetime.fromtimestamp(time.time() + 7*3600).strftime('%Y-%m-%d_%H-%M-%S')
+    return datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
 def log(level, msg):
-    timestamp = _get_wib_timestamp()
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     color_map = {
         "info": Fore.CYAN, "success": Fore.GREEN, "warn": Fore.YELLOW,
         "error": Fore.RED, "run": Fore.MAGENTA
@@ -75,7 +74,7 @@ class SQLiIndexer:
         self.rate_limit_lock = threading.Lock()
         self.rate_limit_until = 0
 
-        output_base_dir = os.path.join(SCRIPT_DIR, '..', '..', 'output')
+        output_base_dir = os.path.join(SCRIPT_DIR, '..', 'output')
         run_dir_name = f"{target_domain.replace('.', '_')}_{_get_wib_timestamp()}"
         self.run_output_dir = os.path.join(output_base_dir, run_dir_name)
         os.makedirs(self.run_output_dir, exist_ok=True)
@@ -105,8 +104,6 @@ class SQLiIndexer:
     def create_example_dork_file(self):
         os.makedirs(os.path.dirname(DORK_FILE_PATH), exist_ok=True)
         with open(DORK_FILE_PATH, 'w', encoding='utf-8') as f:
-            f.write("# Example Google Dorks for SQL Injection\n")
-            f.write("inurl:index.php?id=\n")
             f.write("inurl:gallery.php?id=\n")
             f.write("inurl:article.php?id=\n")
         self.log("info", f"Example file has been created at '{DORK_FILE_PATH}'. Please fill it with relevant dorks.")
@@ -125,7 +122,7 @@ class SQLiIndexer:
             return []
 
     def log(self, level, msg):
-        timestamp = _get_wib_timestamp()
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         color_map = {
             "info": Fore.CYAN,
             "success": Fore.GREEN,
@@ -133,7 +130,7 @@ class SQLiIndexer:
             "error": Fore.RED,
             "run": Fore.MAGENTA
         }
-        icon_map = {"info": "ℹ️", "success": "✅", "warn": "⚠️", "error": "❌", "run": "🚀"}
+    icon_map = {"info": "[INFO]", "success": "[SUCCESS]", "warn": "[WARN]", "error": "[ERROR]", "run": "[RUN]"}
         color = color_map.get(level, Fore.WHITE)
         print(f"{color}[{timestamp}] {icon_map.get(level, ' ')} {msg}{Style.RESET_ALL}")
 
@@ -192,23 +189,28 @@ class SQLiIndexer:
                                     })
                 return 
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429: 
+                if e.response.status_code == 429:
                     with self.rate_limit_lock:
                         wait_time = backoff_factor * (attempt + 1)
                         
                         if time.time() + wait_time > self.rate_limit_until:
                             self.rate_limit_until = time.time() + wait_time
                             self.log("warn", f"Google: Rate limit detected! Activating global cooldown for {wait_time} seconds.")
-                    time.sleep(wait_time) 
+                    time.sleep(wait_time)
                 else:
                     self.log("warn", f"Google: HTTP Error while searching '{full_dork}' (page {page+1}): {e}")
-                    continue 
+                    continue
             except requests.RequestException as e:
                 self.log("warn", f"Google: Failed to search '{full_dork}' (page {page+1}): {e}")
                 if proxy_dict:
                     proxy_address = next(iter(proxy_dict.values())).split('//')[1]
                     self.remove_proxy(proxy_address)
-                continue 
+                continue
+
+    def remove_proxy(self, proxy_address):
+        if proxy_address in self.proxies:
+            self.proxies.remove(proxy_address)
+            self.log("warn", f"Removed unresponsive proxy: {proxy_address}. Remaining proxies: {len(self.proxies)}")
 
     def search_bing_page(self, dork, page):
         """Search on Bing using dorks and return potential URLs."""
@@ -224,7 +226,7 @@ class SQLiIndexer:
         try:
             headers = {'User-Agent': random.choice(USER_AGENTS)}
             proxy_dict = self.get_proxy()
-            time.sleep(random.uniform(1, 3))  
+            time.sleep(random.uniform(1, 3)) 
             r = self.session.get(base_url, params=params, headers=headers, proxies=proxy_dict, timeout=10)
             r.raise_for_status()
 
@@ -293,7 +295,7 @@ class SQLiIndexer:
         
         try:
             with ThreadPoolExecutor(max_workers=self.threads) as executor:
-                with tqdm(total=len(tasks), desc="Searching Dorks") as pbar:
+                with tqdm(total=len(tasks), desc="Searching Dorks", ascii=True) as pbar:
                     futures = [executor.submit(self.search_page, engine, dork, page) for engine, dork, page in tasks]
                     for future in as_completed(futures):
                         pbar.update(1)

