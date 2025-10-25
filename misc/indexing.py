@@ -130,7 +130,7 @@ class SQLiIndexer:
             "error": Fore.RED,
             "run": Fore.MAGENTA
         }
-    icon_map = {"info": "[INFO]", "success": "[SUCCESS]", "warn": "[WARN]", "error": "[ERROR]", "run": "[RUN]"}
+        icon_map = {"info": "[INFO]", "success": "[SUCCESS]", "warn": "[WARN]", "error": "[ERROR]", "run": "[RUN]"}
         color = color_map.get(level, Fore.WHITE)
         print(f"{color}[{timestamp}] {icon_map.get(level, ' ')} {msg}{Style.RESET_ALL}")
 
