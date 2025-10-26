@@ -7,15 +7,18 @@ python-dotenv
 urllib3
 playwright
 python-dateutil
-argparse
 pyyaml
 dnspython
 cryptography
 whois
 pytest
+eel
+pytz
+pyautogui
+cloudscraper
 
 # Notes:
 # After installing playwright, run:
-#   playwright install
+#   playwright install
 # or to only install Chromium:
-#   playwright install chromium
+#   playwright install chromium

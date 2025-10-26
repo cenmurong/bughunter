@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bug Hunter V1.5</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="top-panel">
+            <div class="banner" id="banner">
+                <img src="https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExb292c2N1eG14a29qZ2F3a3F5c2N2b2N0a250a250a250a250/W6dHvprT7oks6BpX5R/giphy.gif" alt="Kaguya Dance GIF">
+            </div>
+            <div class="controls">
+                <div class="input-section">
+                    <label for="url">URL to Scan:</label>
+                    <input type="text" id="url" placeholder="e.g., http://testphp.vulnweb.com">
+                    <label for="module">Specific Module (e.g., xss):</label>
+                    <input type="text" id="module">
+                    <label for="proxyCount">Number of Proxies (default: 0):</label>
+                    <input type="number" id="proxyCount" value="0">
+                </div>
+                <div class="description-section">
+                    <p><strong>Full Scan:</strong> Runs all scanning modules on a single URL.</p>                  
+                    <p><strong>Module Scan:</strong> Runs a specific module on a single URL.</p>
+                    <p><strong>Gather Targets:</strong> Performs dorking and target indexing.</p>
+                    <p><strong>Update Proxies:</strong> Downloads or updates the proxy list.</p>
+                </div>
+                <div class="button-container">
+                    <div class="action-buttons">
+                        <button onclick="startFullScan()">Full Scan</button>
+                        <button onclick="startIndexings()">Gather Targets</button>
+                        <button onclick="startSpecificScan()">Module Scan</button>
+                        <button onclick="startProxyDownloader()">Update Proxies</button>
+                    </div>
+                    <div class="utility-buttons">
+                        <button onclick="clearLog()" class="clear-btn">Clear Log</button>
+                        <button onclick="stopProcess()" id="stopButton" disabled class="stop-btn">Stop Process</button>
+                        <button onclick="window.close()" class="exit-btn">Exit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="log-section">
+            <h3>Log</h3>
+            <div id="log" class="log"></div>
+        </div>
+        <div class="status-bar" id="status">Ready</div>
+    </div>
+
+    <div id="ssrfModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <h4>Include SSRF Scan?</h4>
+            <p>Do you want to include the Server-Side Request Forgery (SSRF) scan? This may take longer.</p>
+            <button onclick="executeFullScan(true)" class="modal-btn-yes">Yes, Include</button>
+            <button onclick="executeFullScan(false)" class="modal-btn-no">No, Skip</button>
+        </div>
+    </div>
+
+    <script src="../eel.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

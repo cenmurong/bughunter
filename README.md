@@ -1,11 +1,11 @@
-# Bug Hunter V1.1
+# Bug Hunter V1.5
 ```
 d8888b. db    db  d888b  db   db db    db d8b   db d888888b d88888b d8888b. 
 88  `8D 88    88 88' Y8b 88   88 88    88 888o  88 `~~88~~' 88'     88  `8D 
 88oooY' 88    88 88      88ooo88 88    88 88V8o 88    88    88ooooo 88oobY' 
 88~~~b. 88    88 88  ooo 88~~~88 88    88 88 V8o88    88    88~~~~~ 88`8b   
 88   8D 88b  d88 88. ~8~ 88   88 88b  d88 88  V888    88    88.     88 `88. 
-Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.1
+Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.5
 ```
 
 If you find this tool useful, don't forget to **star ⭐** this repository and **follow my GitHub account** for future projects\!
@@ -119,7 +119,21 @@ If you find this tool useful, don't forget to **star ⭐** this repository and *
 
 ## Usage
 
-### 1\. Primary Usage (Interactive Menu)
+### 1. Graphical User Interface (GUI)
+
+For a more user-friendly experience, you can use the graphical interface.
+
+```bash
+python3 master-gui.py
+```
+
+The GUI provides an easy way to:
+-   **Start Scans**: Input a target URL and specific modules.
+-   **Manage Processes**: Start and stop scans with dedicated buttons.
+-   **View Logs**: See real-time logs directly in the application window.
+-   **Download Proxies**: Update your proxy list with a single click.
+
+### 2. Primary Usage (Interactive Menu)
 
 Run the `master.py` script to display the menu:
 
