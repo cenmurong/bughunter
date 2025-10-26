@@ -141,6 +141,7 @@ Run the `master.py` script to display the menu:
 ```bash
 python3 master.py
 ```
+<img width="744" height="690" alt="Screenshot from 2025-10-26 08-34-22" src="https://github.com/user-attachments/assets/eee3883d-6d74-4d9a-9aaf-4d0fe0a93890" />
 
 #### Menu Options
 
