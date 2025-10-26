@@ -126,6 +126,7 @@ For a more user-friendly experience, you can use the graphical interface.
 ```bash
 python3 master-gui.py
 ```
+<img width="1119" height="991" alt="Screenshot from 2025-10-26 07-54-37" src="https://github.com/user-attachments/assets/78d8861d-3c5f-4488-8800-f3f1cef8700b" />
 
 The GUI provides an easy way to:
 -   **Start Scans**: Input a target URL and specific modules.
