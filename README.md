@@ -1,4 +1,4 @@
-# Bug Hunter V1.5
+# Bug Hunter V1.5.5
 ```
 d8888b. db    db  d888b  db   db db    db d8b   db d888888b d88888b d8888b. 
 88  `8D 88    88 88' Y8b 88   88 88    88 888o  88 `~~88~~' 88'     88  `8D 
