@@ -5,7 +5,7 @@ d8888b. db    db  d888b  db   db db    db d8b   db d888888b d88888b d8888b.
 88oooY' 88    88 88      88ooo88 88    88 88V8o 88    88    88ooooo 88oobY' 
 88~~~b. 88    88 88  ooo 88~~~88 88    88 88 V8o88    88    88~~~~~ 88`8b   
 88   8D 88b  d88 88. ~8~ 88   88 88b  d88 88  V888    88    88.     88 `88. 
-Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.5
+Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.5.5
 ```
 
 If you find this tool useful, don't forget to **star ⭐** this repository and **follow my GitHub account** for future projects\!
@@ -17,7 +17,7 @@ If you find this tool useful, don't forget to **star ⭐** this repository and *
       * **Full Scan:** Runs all modules, deep scan, port scan, CF bypass, and auto-register.
       * **Specific Module Scan:** Allows you to run only specific modules (e.g., `xss`, `sqli`, `ssrf_internal`).
   * **In-Depth Reconnaissance:**
-      * Integration with **Subfinder** for subdomain discovery.
+      * Integration with **subfinder** for subdomain discovery.
       * Integration with **httpx** to find live web servers.
   * **Dynamic Crawling:** Uses **Playwright** for deep crawling on modern (JavaScript-heavy) web applications to discover more endpoints and parameters.
   * **External Tool Integration:**
@@ -85,7 +85,7 @@ If you find this tool useful, don't forget to **star ⭐** this repository and *
     ```
 
 3.  **Install Playwright browsers:**
-    (Required for dynamic crawling and CF bypass)
+    (Note: Playwright is currently disabled in `misc/tools.py` but required for full functionality if re-enabled).
 
     ```bash
     playwright install
@@ -126,7 +126,7 @@ For a more user-friendly experience, you can use the graphical interface.
 ```bash
 python3 master-gui.py
 ```
-<img width="1119" height="991" alt="Screenshot from 2025-10-26 07-54-37" src="https://github.com/user-attachments/assets/78d8861d-3c5f-4488-8800-f3f1cef8700b" />
+<img width="1033" height="957" alt="Screenshot from 2025-10-31 04-52-26" src="https://github.com/user-attachments/assets/b3feb9d6-0d0e-4621-9ac2-480daa55ab89" />
 
 The GUI provides an easy way to:
 -   **Start Scans**: Input a target URL and specific modules.
@@ -141,30 +141,34 @@ Run the `master.py` script to display the menu:
 ```bash
 python3 master.py
 ```
-<img width="744" height="690" alt="Screenshot from 2025-10-26 08-34-22" src="https://github.com/user-attachments/assets/eee3883d-6d74-4d9a-9aaf-4d0fe0a93890" />
+<img width="690" height="686" alt="Screenshot from 2025-10-31 05-16-06" src="https://github.com/user-attachments/assets/01bce969-acb7-4351-86f9-4b044d936134" />
 
 #### Menu Options
 
-  * **[1] Gather Targets (Dorking & Indexing)**
-
-      * Runs the `misc/indexing.py` script to gather targets based on dorks in `payloads/dork.txt`.
-      * Results are saved in the `output` directory.
-
-  * **[2] Scan URL (Full Scan)**
+  * **[1] Scan URL (Full Scan)**
 
       * Asks for a target URL.
-      * Runs a full scan using `tools.py` with all features enabled (`--deep-scan`, `--full-port-scan`, `--cf-bypass`, `--auto-register`).
+      * Runs a full scan using `tools.py` with all features enabled (`--deep-scan`).
       * You will be asked if you want to include the SSRF scan (which can be time-consuming).
 
-  * **[3] Scan URL (Specific Module)**
+  * **[2] Scan URL (Specific Module)**
 
       * Asks for a target URL and the name of the module to run.
       * Module examples: `xss`, `sqli`, `lfi`, `ssrf_internal`, `security_headers`.
-      * See the full list of modules above or in `tools.py` (the `run_specific_module` function).
+      * See the full list of modules below or in `tools.py` (the `run_specific_module` function).
 
-  * **[4] Download/Update Proxy List**
+  * **[3] Gather Targets (Dorking & Indexing)**
+
+      * Runs the `misc/indexing.py` script to gather targets based on dorks in `payloads/dork.txt`.
+      * Results are saved in the `scan_results` directory.
+
+  * **[4] Update Proxies**
 
       * Runs the `misc/downloader.py` script to download a new proxy list.
+
+  * **[5] Mass Scan from Crawled URLs**
+
+      * Runs a full scan on all URLs found in `crawled_urls.txt`.
 
   * **[0] Exit**
 
@@ -189,7 +193,7 @@ python3 misc/tools.py https://target.com --modules "lfi,sqli,ssti"
 **Example: Run a full scan (like Option 2) from the command line**
 
 ```bash
-python3 misc/tools.py https://target.com --deep-scan --full-port-scan --cf-bypass --auto-register --yes
+python3 misc/tools.py https://target.com --deep-scan --cf-bypass --auto-register --yes
 ```
 
 Use `-h` to see all available flags:
