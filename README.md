@@ -5,7 +5,7 @@ d8888b. db    db  d888b  db   db db    db d8b   db d888888b d88888b d8888b.
 88oooY' 88    88 88      88ooo88 88    88 88V8o 88    88    88ooooo 88oobY' 
 88~~~b. 88    88 88  ooo 88~~~88 88    88 88 V8o88    88    88~~~~~ 88`8b   
 88   8D 88b  d88 88. ~8~ 88   88 88b  d88 88  V888    88    88.     88 `88. 
-Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.5
+Y8888P' ~Y8888P'  Y888P  YP   YP ~Y8888P' VP   V8P    YP    Y88888P 88   YD V1.5.5
 ```
 
 If you find this tool useful, don't forget to **star ⭐** this repository and **follow my GitHub account** for future projects\!
@@ -126,7 +126,7 @@ For a more user-friendly experience, you can use the graphical interface.
 ```bash
 python3 master-gui.py
 ```
-<img width="1119" height="991" alt="Screenshot from 2025-10-26 07-54-37" src="https://github.com/user-attachments/assets/78d8861d-3c5f-4488-8800-f3f1cef8700b" />
+<img width="1033" height="957" alt="Screenshot from 2025-10-31 04-52-26" src="https://github.com/user-attachments/assets/d53c0554-31a8-4225-a3da-0a5ced64ce48" />
 
 The GUI provides an easy way to:
 -   **Start Scans**: Input a target URL and specific modules.
@@ -141,7 +141,7 @@ Run the `master.py` script to display the menu:
 ```bash
 python3 master.py
 ```
-<img width="744" height="690" alt="Screenshot from 2025-10-26 08-34-22" src="https://github.com/user-attachments/assets/eee3883d-6d74-4d9a-9aaf-4d0fe0a93890" />
+<img width="690" height="686" alt="Screenshot from 2025-10-31 05-16-06" src="https://github.com/user-attachments/assets/19636f30-5295-4912-9854-cb0abdd87f84" />
 
 #### Menu Options
 
