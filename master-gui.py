@@ -1,3 +1,8 @@
+# Copyright (c) 2024 cenmurong.
+#
+# This software is provided for security research and educational use.
+# Any action and/or activity related to this material is solely your responsibility.
+
 import eel
 import threading
 from master import run_indexing, scan_single_url, run_proxy_downloader, log
@@ -73,17 +78,10 @@ def start_indexing():
 
 
 @eel.expose
-def start_scan(full_scan, url, module=None, include_ssrf=True, callback=None):
+def execute_scan_thread(full_scan, url, module, include_ssrf, callback=None):
     if not stop_event.is_set():
         stop_event.clear()
         eel.updateStopButtonState(True)
-        if not url and full_scan:
-            gui_log("error", "URL cannot be empty")
-            if callback:
-                callback(False)
-            return None
-
-        final_modules_str = None
         if full_scan:
             mode = "Full Scan"
         else:
@@ -95,8 +93,7 @@ def start_scan(full_scan, url, module=None, include_ssrf=True, callback=None):
                 final_modules_list = base_modules + additional_modules
             else:
                 final_modules_list = base_modules
-            final_modules_str = ",".join(final_modules_list)
-            mode = f"Specific Modules: {final_modules_str}"
+            mode = f"Specific Modules: {','.join(final_modules_list)}"
 
         gui_log(
             "info",
@@ -108,7 +105,7 @@ def start_scan(full_scan, url, module=None, include_ssrf=True, callback=None):
                 scan_single_url,
                 full_scan=full_scan,
                 url=url,
-                module=final_modules_str,
+                module=module,
                 include_ssrf=include_ssrf)
             if callback:
                 eel._execute_callback(callback, result)
@@ -119,6 +116,23 @@ def start_scan(full_scan, url, module=None, include_ssrf=True, callback=None):
         if callback:
             callback(False)
         return None
+
+@eel.expose
+def start_scan(full_scan, url, module=None, include_ssrf=True, callback=None):
+    if not url:
+        gui_log("error", "URL cannot be empty")
+        if callback:
+            callback(False)
+        return None
+
+    base_modules = ["crawler", "subfinder", "httpx"]
+    if module:
+        additional_modules = [m.strip() for m in module.split(',') if m.strip() and m not in base_modules]
+        final_modules_list = base_modules + additional_modules
+    else:
+        final_modules_list = base_modules
+    final_modules_str = ",".join(final_modules_list)
+    return execute_scan_thread(full_scan, url, final_modules_str, include_ssrf, callback)
 
 
 @eel.expose
@@ -158,6 +172,7 @@ def stop_process():
 if __name__ == "__main__":
     eel.init('gui')
     gui_log("run", "Initializing Bug Hunter GUI...")
+    gui_log("warn", "This tool is for educational purposes and security testing only. Do not use it on government websites without official permission.")
     try:
 
         screen_width, screen_height = pyautogui.size()
@@ -173,14 +188,14 @@ if __name__ == "__main__":
                 left, top), port=0)
     except EnvironmentError as e:
         if "Can't find Google Chrome/Chromium installation" in str(e):
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print(
                 "ERROR: Google Chrome or Chromium browser is not installed or not found by Eel.")
             print("Please install Google Chrome or Chromium to run the GUI.")
             print("  - For Windows/macOS: Download from google.com/chrome")
             print("  - For Linux (Debian/Ubuntu): sudo apt install chromium-browser")
             print("  - For Linux (Fedora): sudo dnf install chromium")
-            print("="*80 + "\n")
+            print("=" * 80 + "\n")
         else:
             print(f"An unexpected environment error occurred: {e}")
         sys.exit(1)

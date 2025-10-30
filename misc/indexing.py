@@ -1,3 +1,8 @@
+# Copyright (c) 2024 cenmurong. All Rights Reserved.
+#
+# This tool is for educational purposes only. The author is not responsible for any
+# misuse or damage caused by this program. Use at your own risk.
+
 import requests
 from bs4 import BeautifulSoup
 import sys
@@ -51,7 +56,7 @@ def _get_wib_timestamp():
 
 
 def log(level, msg):
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    timestamp = datetime.now().strftime('%H:%M:%S')
     color_map = {
         "info": Fore.CYAN, "success": Fore.GREEN, "warn": Fore.YELLOW,
         "error": Fore.RED, "run": Fore.MAGENTA
@@ -85,7 +90,7 @@ class SQLiIndexer:
         self.monitor_stop_signal()
         self.rate_limit_until = 0
 
-        output_base_dir = os.path.join(SCRIPT_DIR, '..', 'output')
+        output_base_dir = os.path.join(SCRIPT_DIR, '..', 'scan_results')
         run_dir_name = f"{
             target_domain.replace(
                 '.', '_')}_{
@@ -164,7 +169,7 @@ class SQLiIndexer:
             return []
 
     def log(self, level, msg):
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        timestamp = datetime.now().strftime('%H:%M:%S')
         color_map = {
             "info": Fore.CYAN,
             "success": Fore.GREEN,

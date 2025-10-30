@@ -10,12 +10,11 @@ from tqdm import tqdm
 init(autoreset=True)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PAYLOADS_DIR = os.path.join(SCRIPT_DIR, '..', 'payloads')
-PROXY_FILE_PATH = os.path.join(PAYLOADS_DIR, 'proxies.txt')
+PROXY_FILE_PATH = os.path.join(SCRIPT_DIR, 'proxies.txt')
 
 
 def check_proxy(proxy):
-    """Checks if a proxy is active with a short timeout."""
+
     try:
         response = requests.get("http://httpbin.org/ip",
                                 proxies={'http': proxy, 'https': proxy},
@@ -28,7 +27,7 @@ def check_proxy(proxy):
 
 
 def log(level, message):
-    """Simple logging function for the downloader."""
+
     color_map = {
         "info": Fore.CYAN,
         "success": Fore.GREEN,
@@ -47,7 +46,7 @@ def log(level, message):
 
 
 def collect_and_save_proxies():
-    """Fetches a list of free proxies from public sources and saves them to a file."""
+
     parser = argparse.ArgumentParser(
         description="Proxy Downloader and Verifier.")
     parser.add_argument(
@@ -64,8 +63,7 @@ def collect_and_save_proxies():
         "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
         "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
-        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"
-    ]
+        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"]
 
     initial_proxies = set()
     for source in proxy_sources:

@@ -204,6 +204,32 @@ button:disabled {
     text-align: center;
 }
 
+.progress-container {
+    padding: 10px;
+    background: #2c313a;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.progress-bar {
+    height: 8px;
+    background: #333;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 5px;
+}
+
+#progressFill {
+    height: 100%;
+    background: var(--accent-color);
+    transition: width 0.3s;
+}
+
+#progressText {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    text-align: center;
+    margin: 0;
+}
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg-color); }

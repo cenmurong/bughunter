@@ -1,26 +1,40 @@
+# Copyright (c) 2024 cenmurong. All Rights Reserved.
+#
+# This tool is for educational purposes only. The author is not responsible for any
+# misuse or damage caused by this program. Use at your own risk.
+
 import subprocess
 import os
 import re
 import shlex
 import sys
 import time
+import threading
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+misc_path = os.path.join(SCRIPT_DIR, 'misc')
+if misc_path not in sys.path:
+    sys.path.insert(0, misc_path)
+
+from mass_scan import run_mass_scan_from_crawler
+from tools import BugHunterPro
 from urllib.parse import urlparse
 from queue import Queue, Empty
 from colorama import init, Fore, Style
 from tqdm import tqdm
-import threading
+
 init(autoreset=True)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = SCRIPT_DIR
 TOOL_NAME = "Bug Hunter"
-VERSION = "V.1.5"
+VERSION = "V1.5.5"
 
 stop_event = None
 
 
 def _get_timestamp():
-    return time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
+    return time.strftime('%H:%M:%S', time.localtime())
 
 
 def log(level, message):
@@ -47,7 +61,7 @@ def log(level, message):
 
 
 def loading_animation():
-    log("run", "Initializing Bug Hunter V1.5...")
+    log("run", "Initializing Bug Hunter V1.5.5...")
     time.sleep(1)
 
 
@@ -129,6 +143,7 @@ def display_menu():
     print("2. Scan URL (Specific Module)")
     print("3. Gather Targets (Dorking & Indexing)")
     print("4. Update Proxies")
+    print("5. Mass Scan from Crawled URLs")
     print("0. Exit")
     print("-" * 40)
 
@@ -166,6 +181,8 @@ def run_indexing(choices=None):
 def scan_single_url(full_scan=True, url=None, module=None, include_ssrf=True):
     global stop_event
 
+    is_cli_call = url is None
+
     if url is None:
         url = input(
             f"{Fore.YELLOW}Enter URL to scan: {Style.RESET_ALL}").strip()
@@ -174,8 +191,10 @@ def scan_single_url(full_scan=True, url=None, module=None, include_ssrf=True):
         log("error", "URL cannot be empty")
         return False
 
+    log("warn", "These tools are for educational purposes only. Do not use them on government websites without official permission.")
+
     scan_output_dir = os.path.join(
-        PROJECT_ROOT, "output", f"scan_{
+        PROJECT_ROOT, "scan_results", f"scan_{
             _get_timestamp()}")
     os.makedirs(scan_output_dir, exist_ok=True)
 
@@ -186,8 +205,17 @@ def scan_single_url(full_scan=True, url=None, module=None, include_ssrf=True):
                 shlex.quote(scan_output_dir)} --yes"
     if full_scan:
         command += " --deep-scan"
+        if is_cli_call:
+            confirm = input(
+                f"Do you want to include internal SSRF scanning? (y/n, default: n): "
+            ).lower()
+            if confirm == 'n':
+                include_ssrf = False
         if not include_ssrf:
+            log("warn", "Internal SSRF scan will be skipped as per user request.")
             command += " --no-ssrf"
+        else:
+            log("info", "Internal SSRF scan enabled.")
         log("run", "Running full scan")
     else:
 
@@ -259,6 +287,8 @@ def run_proxy_downloader(auto_count=None):
 def main():
     global stop_event
     loading_animation()
+    log("warn", "This tool is for educational purposes and security testing only. Do not use it on government websites without official permission.")
+
     while True:
         display_menu()
         choice = input(
@@ -276,6 +306,8 @@ def main():
             run_indexing()
         elif choice == 4:
             run_proxy_downloader()
+        elif choice == 5:
+            run_mass_scan_from_crawler()
         elif choice == 0:
             log("info", "Thank you for using Bug Hunter V1. See you later!")
             sys.exit(0)

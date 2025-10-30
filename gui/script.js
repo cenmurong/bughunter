@@ -24,7 +24,7 @@ function executeFullScan(includeSSRF) {
     }
     try {
         console.log("Calling eel.start_scan with:", { full_scan: true, url: tempUrl, module: null, includeSSRF });
-        eel.start_scan(true, tempUrl, null, includeSSRF, function(result) {
+        eel.execute_scan_thread(true, tempUrl, null, includeSSRF, function(result) {
             console.log("Scan result callback:", result);
             if (result) {
                 updateStatus("Full scan completed successfully");
@@ -171,3 +171,13 @@ eel.expose(resetGuiState);
 eel.expose(updateStopButtonState);
 eel.expose(showDialog);
 eel.expose(showDialogOptions);
+eel.expose(startProgress);
+eel.expose(updateProgress);
+eel.expose(completeTask);
+
+function showSsrfsModal() {
+    console.log("Showing SSRF modal from Python call.");
+    document.getElementById('ssrfModal').style.display = 'flex';
+}
+
+eel.expose(showSsrfsModal);

